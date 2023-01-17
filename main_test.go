@@ -3,61 +3,41 @@ package main
 import (
 	"testing"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDifference(t *testing.T) {
+func TestDiscordUserParse(t *testing.T) {
 	testPatterns := map[string]struct {
-		a      []*discordgo.User
-		b      []*discordgo.User
-		expect []*discordgo.User
+		input         string
+		username      string
+		descriminator string
+		wantErr       bool
 	}{
-		"intersect": {
-			a: []*discordgo.User{
-				{ID: "1"},
-				{ID: "2"},
-			},
-			b: []*discordgo.User{
-				{ID: "3"},
-				{ID: "2"},
-				{ID: "3"},
-			},
-			expect: []*discordgo.User{
-				{ID: "1"},
-			},
+		"multibyte": {
+			input:         "テスト#1234",
+			username:      "テスト",
+			descriminator: "1234",
+			wantErr:       false,
 		},
-		"no a": {
-			a: nil,
-			b: []*discordgo.User{
-				{ID: "3"},
-				{ID: "2"},
-				{ID: "3"},
-			},
-			expect: nil,
+		"missmatch pattern": {
+			input:   "onlyname",
+			wantErr: true,
 		},
-		"no b": {
-			a: []*discordgo.User{
-				{ID: "1"},
-				{ID: "2"},
-			},
-			b: nil,
-			expect: []*discordgo.User{
-				{ID: "1"},
-				{ID: "2"},
-			},
+		"misspattern": {
+			input:   `a`,
+			wantErr: true,
 		},
-	}
-
-	extractIDs := func(users []*discordgo.User) []string {
-		return lo.Map(users, func(item *discordgo.User, index int) string { return item.ID })
 	}
 	for k, v := range testPatterns {
 		t.Run(k, func(t *testing.T) {
-			t.Parallel()
-			actual := difference(v.a, v.b)
-			assert.Equal(t, extractIDs(v.expect), extractIDs(actual))
+			u, d, err := DiscordUserParse(v.input)
+			if v.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, v.username, u)
+			assert.Equal(t, v.descriminator, d)
 		})
 	}
 }

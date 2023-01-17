@@ -4,9 +4,11 @@ go 1.19
 
 require (
 	github.com/Nerzal/gocloak/v12 v12.0.0
+	github.com/azuki-bar/goset v0.0.0-20230115040230-a66db806bae5
 	github.com/bwmarrin/discordgo v0.26.1
+	github.com/pkg/errors v0.9.1
 	github.com/samber/lo v1.37.0
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.8.1
 	github.com/vrischmann/envconfig v1.3.0
 	go.uber.org/zap v1.24.0
 )
@@ -17,7 +19,6 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.4.2 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	go.uber.org/atomic v1.7.0 // indirect

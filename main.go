@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"regexp"
 
 	"github.com/Nerzal/gocloak/v12"
+	"github.com/azuki-bar/goset"
 	"github.com/bwmarrin/discordgo"
 	"github.com/samber/lo"
 	"github.com/vrischmann/envconfig"
@@ -19,8 +20,8 @@ type Conf struct {
 	Discord  DiscordConf
 }
 type LogConf struct {
-	Level         *MyLogLevel
-	IsDevelopment bool
+	Level         *MyLogLevel `envconfig:"default=info"`
+	IsDevelopment bool        `envconfig:"default=false"`
 }
 type MyLogLevel zapcore.Level
 
@@ -34,12 +35,13 @@ func (l *MyLogLevel) Unmarshal(s string) error {
 }
 
 type KeycloakConf struct {
-	EndPoint            string
-	UserName            string
-	Password            string
-	Realm               string
-	AcceptRealmRoleName string
-	AttrsKey            string
+	EndPoint   string
+	UserName   string
+	Password   string
+	LoginRealm string
+	UserRealm  string
+	AttrsKey   string
+	GroupPath  string
 }
 
 type DiscordConf struct {
@@ -49,51 +51,54 @@ type DiscordConf struct {
 }
 
 var Config Conf
+var Version = "snapshot"
 
-func init() {
+func main() {
 	if err := envconfig.InitWithOptions(&Config, envconfig.Options{}); err != nil {
 		panic(err)
 	}
-}
-func main() {
 	logger := zap.Must(func() (*zap.Logger, error) {
 		if Config.Log.IsDevelopment {
 			return zap.NewDevelopment(zap.IncreaseLevel(zapcore.Level(*Config.Log.Level)))
 		}
 		return zap.NewProduction(zap.IncreaseLevel(zapcore.Level(*Config.Log.Level)))
 	}())
-	cloakClient := gocloak.NewClient(Config.Keycloak.EndPoint)
-	ctx := context.Background()
-	token, err := cloakClient.LoginAdmin(ctx, Config.Keycloak.UserName, Config.Keycloak.Password, Config.Keycloak.Realm)
+	logger.Info("init logger successful", zap.Stringer("loglevel", logger.Level()), zap.String("version", Version))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	keycloakUsers, err := fetchKeycloakUsers(ctx, logger, Config.Keycloak)
 	if err != nil {
-		logger.Fatal("login to keycloak failed", zap.Error(err))
-	}
-	keycloakUsers, err := cloakClient.GetUsers(ctx, token.AccessToken, Config.Keycloak.Realm, gocloak.GetUsersParams{})
-	if err != nil {
-		logger.Fatal("get users failed", zap.Error(err))
+		logger.Error("fetch users in keycloak failed", zap.Error(err))
+		return
 	}
 	sess, err := discordgo.New("Bot " + Config.Discord.Token)
 	if err != nil {
-		panic(err)
+		logger.Fatal("discord login failed", zap.Error(err))
 	}
+	if err := sess.Open(); err != nil {
+		logger.Fatal("open websocket connection failed", zap.Error(err))
+	}
+	defer sess.Close()
 	guild, err := sess.Guild(Config.Discord.GuildID)
 	if err != nil {
-		panic(err)
+		logger.Fatal("discord guild fetch failed", zap.Error(err), zap.String("guildID", Config.Discord.GuildID))
 	}
 	keycloakCircleMembers := lo.FilterMap(keycloakUsers, func(user *gocloak.User, _ int) (keycloakUser, bool) {
+		if user.Attributes == nil {
+			logger.Info("user attributes not found", zap.Any("user", user))
+			return keycloakUser{}, false
+		}
 		attrs := *user.Attributes
 		discordUsernames, ok := attrs[Config.Keycloak.AttrsKey]
 		if !ok {
 			logger.Info("attribute not found", zap.String("attr key", Config.Keycloak.AttrsKey), zap.Stringer("user", user))
 			return keycloakUser{}, false
 		}
-		if !lo.Contains(*user.RealmRoles, Config.Keycloak.AcceptRealmRoleName) {
-			return keycloakUser{}, false
-		}
 		discordUsers := lo.FilterMap(discordUsernames, func(item string, _ int) (*discordgo.User, bool) {
 			user, err := ScreenName2user(logger, sess, guild.ID, item)
 			if err != nil {
-				logger.Warn("user not found", zap.String("username", item))
+				logger.Warn("user not found", zap.Error(err), zap.String("discord username", item))
 				return nil, false
 			}
 			return user, true
@@ -104,19 +109,28 @@ func main() {
 		}, true
 	})
 
-	// TODO: aggredUsersのDiscordUsersに対してflatmapして集合を作る
+	// aggredUsersのDiscordUsersに対してflatmapして集合を作る
 	// 部員ロール集合も持ってくる
 	// 1. flatten(DiscordUsers) - 部員 を作る
 	// 2. 部員ロール - flatten(DiscordUsers)を作る
 	// 1に含まれるユーザに対して部員ロールを付与
 	// 2に含まれるユーザに対して部員ロールを剥奪
-	logger.Debug("fetch users", zap.Any("user", keycloakCircleMembers))
 	usersInKeycloak := lo.FlatMap(keycloakCircleMembers, func(user keycloakUser, _ int) []*discordgo.User { return user.DiscordUsers })
-	buinUsers := lo.FilterMap(guild.Members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
-		return item.User, lo.ContainsBy(item.Roles, func(item string) bool { return item == Config.Discord.RoleID })
+	logger.Debug("users in keycloak with attribute", zap.Any("users", usersInKeycloak))
+	members, err := sess.GuildMembers(guild.ID, "", 1000)
+	if err != nil {
+		logger.Error("fetch guild members error", zap.Error(err))
+	}
+	buinUsers := lo.FilterMap(members, func(member *discordgo.Member, _ int) (*discordgo.User, bool) {
+		return member.User, lo.ContainsBy(member.Roles, func(role string) bool {
+			return role == Config.Discord.RoleID
+		})
 	})
-	addRoleUsers := difference(usersInKeycloak, buinUsers)
-	depriveRoleUsers := difference(buinUsers, usersInKeycloak)
+	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
+	addRoleUsers := goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID })
+	logger.Info("add role users", zap.Any("users", addRoleUsers))
+	depriveRoleUsers := goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID })
+	logger.Info("role deprive users", zap.Any("users", depriveRoleUsers))
 
 	lo.ForEach(addRoleUsers, func(item *discordgo.User, _ int) {
 		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
@@ -124,11 +138,14 @@ func main() {
 		}
 	})
 	lo.ForEach(depriveRoleUsers, func(item *discordgo.User, _ int) {
-		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
 			logger.Error("role delete failed", zap.String("username", item.Username))
 		}
 	})
-
+	logger.Info("task is over!",
+		zap.Stringers("role add users", addRoleUsers),
+		zap.Stringers("role deprive users", depriveRoleUsers),
+	)
 }
 
 type keycloakUser struct {
@@ -136,13 +153,36 @@ type keycloakUser struct {
 	DiscordUsers []*discordgo.User
 }
 
-func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string, screenName string) (*discordgo.User, error) {
-	guild, err := sess.Guild(guildID)
+func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakConf) ([]*gocloak.User, error) {
+	cloakClient := gocloak.NewClient(conf.EndPoint)
+	token, err := cloakClient.LoginAdmin(ctx, conf.UserName, conf.Password, conf.LoginRealm)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("login to keycloak failed, err=`%w`", err)
 	}
-	users := lo.FilterMap(guild.Members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
-		if item.User.Username == screenName {
+	group, err := cloakClient.GetGroupByPath(ctx, token.AccessToken, conf.UserRealm, conf.GroupPath)
+	if err != nil {
+		logger.Fatal("get group by path failed", zap.Error(err), zap.String("grouppath", conf.GroupPath))
+		return nil, fmt.Errorf("get group by path failed,err=`%w`", err)
+	}
+	logger.Debug("user in keycloak joined in group", zap.Any("group", group))
+	keycloakUsers, err := cloakClient.GetGroupMembers(ctx, token.AccessToken, conf.UserRealm, *group.ID, gocloak.GetGroupsParams{})
+	if err != nil {
+		return nil, fmt.Errorf("get users failed, err=`%w`", err)
+	}
+	return keycloakUsers, nil
+}
+
+func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string, screenName string) (*discordgo.User, error) {
+	members, err := sess.GuildMembers(Config.Discord.GuildID, "", 1000)
+	if err != nil {
+		return nil, fmt.Errorf("guildmember fetch failed,err=`%w`", err)
+	}
+	name, discriminator, err := DiscordUserParse(screenName)
+	if err != nil {
+		return nil, fmt.Errorf("parse failed,err=`%w`", err)
+	}
+	users := lo.FilterMap(members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
+		if item.User.Username == name && item.User.Discriminator == discriminator {
 			return item.User, true
 		}
 		return nil, false
@@ -158,26 +198,16 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 	}
 }
 
-// difference returns the set difference calc by a - b.
-func difference(a, b []*discordgo.User) []*discordgo.User {
-	aMap := make(map[string]*discordgo.User)
-	bMap := make(map[string]*discordgo.User)
-	for _, user := range a {
-		if _, ok := aMap[user.ID]; !ok {
-			aMap[user.ID] = user
-		}
+var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
+
+func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
+	parsed := usernameRe.FindStringSubmatch(usernameRaw)
+	switch len(parsed) {
+	case 0, 1, 2:
+		return "", "", fmt.Errorf("parsed failed, no group match")
+	case 3:
+		return parsed[1], parsed[2], nil
+	default:
+		return "", "", fmt.Errorf("parse failed")
 	}
-	for _, user := range b {
-		if _, ok := bMap[user.ID]; !ok {
-			bMap[user.ID] = user
-		}
-	}
-	log.Println(aMap, bMap)
-	diff := make([]*discordgo.User, 0)
-	for ka, va := range aMap {
-		if _, ok := bMap[ka]; !ok {
-			diff = append(diff, va)
-		}
-	}
-	return diff
 }
