@@ -9,15 +9,13 @@ services:
       KEYCLOAK_USERNAME: admin
       KEYCLOAK_PASSWORD: admin
       KEYCLOAK_LOGIN_REALM: master
-      KEYCLOAK_USER_REALM: koken
-      KEYCLOAK_MEMBER_GROUP_NAME: koken
+      KEYCLOAK_USER_REALM: 
       KEYCLOAK_ATTRS_KEY: discord-username
-      KEYCLOAK_GROUP_PATH: /koken
-      DISCORD_TOKEN: MTA2MzgyNDUyMjQ1ODk1NTc5OA.G_Ph6L.qY-30izo1kr0q9JW5i3LjRxMOGc8P-lGurCzxY
-      DISCORD_GUILD_ID: 829681869707935774
-      DISCORD_ROLE_ID: 1063825231485096056
+      KEYCLOAK_GROUP_PATH:
+      DISCORD_TOKEN:
+      DISCORD_GUILD_ID:
+      DISCORD_ROLE_ID:
     depends_on:
-
       keycloak:
         condition: service_healthy
 
