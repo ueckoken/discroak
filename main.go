@@ -69,8 +69,7 @@ func main() {
 	defer cancel()
 	keycloakUsers, err := fetchKeycloakUsers(ctx, logger, Config.Keycloak)
 	if err != nil {
-		logger.Error("fetch users in keycloak failed", zap.Error(err))
-		return
+		logger.Fatal("fetch users in keycloak failed", zap.Error(err))
 	}
 	sess, err := discordgo.New("Bot " + Config.Discord.Token)
 	if err != nil {
@@ -134,12 +133,12 @@ func main() {
 
 	lo.ForEach(addRoleUsers, func(item *discordgo.User, _ int) {
 		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role add failed", zap.String("username", item.Username))
+			logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 		}
 	})
 	lo.ForEach(depriveRoleUsers, func(item *discordgo.User, _ int) {
 		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role delete failed", zap.String("username", item.Username))
+			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
 		}
 	})
 	logger.Info("task is over!",
