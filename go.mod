@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/Nerzal/gocloak/v12 v12.0.0
-	github.com/azuki-bar/goset v0.0.0-20230115040230-a66db806bae5
+	github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd
 	github.com/bwmarrin/discordgo v0.26.1
 	github.com/samber/lo v1.37.0
 	github.com/stretchr/testify v1.8.1

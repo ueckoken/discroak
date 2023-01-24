@@ -2,6 +2,8 @@ github.com/Nerzal/gocloak/v12 v12.0.0 h1:oOddyLpf+CxdGHFx5bABn4yCAtIGDwJkvJP4hFS
 github.com/Nerzal/gocloak/v12 v12.0.0/go.mod h1:EAIc7luf3+dwMMHNWC9/X9vAA+KZJl5qfSWDIu7IlSs=
 github.com/azuki-bar/goset v0.0.0-20230115040230-a66db806bae5 h1:AWmGVt5qKAxzGncRJYbYTEIOwkda2sXlZyFQ6S2pNXM=
 github.com/azuki-bar/goset v0.0.0-20230115040230-a66db806bae5/go.mod h1:d+p4DmCvj6qajBztqyR3lzYHe9qiCNGlaaX6LVZu05I=
+github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd h1:Jtr+wrgJZfk5lbI3937kOFSzWLOglfikfb1UEUVKd30=
+github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd/go.mod h1:IGMahmqKwmzOyzUlOhu/aM4T4BWu7KsZ26ZXa59IwIA=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/bwmarrin/discordgo v0.26.1 h1:AIrM+g3cl+iYBr4yBxCBp9tD9jR3K7upEjl0d89FRkE=
 github.com/bwmarrin/discordgo v0.26.1/go.mod h1:NJZpH+1AfhIcyQsPeuBKsUtYrRnjkyu0kIVMCHkZtRY=
