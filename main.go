@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
+	"text/template"
 
 	"github.com/Nerzal/gocloak/v12"
 	"github.com/azuki-bar/goset"
@@ -45,9 +47,10 @@ type KeycloakConf struct {
 }
 
 type DiscordConf struct {
-	Token   string
-	GuildID string
-	RoleID  string
+	Token           string
+	GuildID         string
+	RoleID          string
+	NotifyChannelID string `envconfig:"optional"`
 }
 
 var Config Conf
@@ -126,25 +129,78 @@ func main() {
 		})
 	})
 	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
-	addRoleUsers := goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID })
-	logger.Info("add role users", zap.Any("users", addRoleUsers))
-	depriveRoleUsers := goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID })
-	logger.Info("role deprive users", zap.Any("users", depriveRoleUsers))
+	addRoleTargets := goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID })
+	logger.Info("add role users", zap.Stringers("users", addRoleTargets))
+	removeRoleTargets := goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID })
+	logger.Info("role remove users", zap.Stringers("users", removeRoleTargets))
 
-	lo.ForEach(addRoleUsers, func(item *discordgo.User, _ int) {
+	lo.ForEach(addRoleTargets, func(item *discordgo.User, _ int) {
 		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
 			logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 		}
 	})
-	lo.ForEach(depriveRoleUsers, func(item *discordgo.User, _ int) {
+	lo.ForEach(removeRoleTargets, func(item *discordgo.User, _ int) {
 		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
 			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
 		}
 	})
 	logger.Info("task is over!",
-		zap.Stringers("role add users", addRoleUsers),
-		zap.Stringers("role deprive users", depriveRoleUsers),
+		zap.Stringers("role add users", addRoleTargets),
+		zap.Stringers("role remove users", removeRoleTargets),
 	)
+	if Config.Discord.NotifyChannelID != "" && (len(addRoleTargets) != 0 || len(removeRoleTargets) != 0) {
+		err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, removeRoleTargets)
+		if err != nil {
+			logger.Error("post role modify info failed", zap.Error(err))
+		}
+	}
+}
+
+var postMsgTmpl = template.Must(template.New("sendResult").Parse(`ロールの操作をしました。
+ロールを付与したユーザー
+{{ .Quote }}
+{{- range .AddNames }}
+{{. -}}
+{{ end }}
+{{ .Quote }}
+ロールを剥奪したユーザー
+{{ .Quote }}
+{{- range .RemoveNames }}
+{{. -}}
+{{ end }}
+{{ .Quote }}
+`))
+
+func CreateMsg(addUsers, removeUsers []string) (string, error) {
+	buf := new(bytes.Buffer)
+	msgStr := struct {
+		Quote       string
+		AddNames    []string
+		RemoveNames []string
+	}{
+		Quote:       "```",
+		AddNames:    addUsers,
+		RemoveNames: removeUsers,
+	}
+	if err := postMsgTmpl.Execute(buf, msgStr); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func PostResult(session *discordgo.Session, channelID string, addUsers, removeUsers []*discordgo.User) error {
+	addUsersScreen := lo.Map(addUsers, func(user *discordgo.User, _ int) string {
+		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
+	})
+	deleteUsersScreen := lo.Map(removeUsers, func(user *discordgo.User, _ int) string {
+		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
+	})
+	content, err := CreateMsg(addUsersScreen, deleteUsersScreen)
+	if err != nil {
+		return err
+	}
+	_, err = session.ChannelMessageSend(channelID, content)
+	return err
 }
 
 type keycloakUser struct {
