@@ -37,7 +37,7 @@ services:
     ports:
       - 8080:8080
   keycloak-db:
-    image: mysql:8.0.31
+    image: mysql:8.0.32
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: keycloak
