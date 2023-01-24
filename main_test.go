@@ -41,3 +41,37 @@ func TestDiscordUserParse(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateMsg(t *testing.T) {
+	testCases := map[string]struct {
+		input1  []string
+		input2  []string
+		expect  string
+		wantErr bool
+	}{
+		"exist input1 and input2": {
+			input1:  []string{"a", "b", "c"},
+			input2:  []string{"z", "y", "x"},
+			expect:  "ロールの操作をしました。\nロールを付与したユーザー\n```\na\nb\nc\n```\nロールを剥奪したユーザー\n```\nz\ny\nx\n```\n",
+			wantErr: false,
+		},
+		"no exist input1 and input2": {
+			input1:  []string{},
+			input2:  []string{},
+			expect:  "ロールの操作をしました。\nロールを付与したユーザー\n```\n```\nロールを剥奪したユーザー\n```\n```\n",
+			wantErr: false,
+		},
+	}
+	for k, v := range testCases {
+		t.Run(k, func(t *testing.T) {
+			actual, err := CreateMsg(v.input1, v.input2)
+			if v.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, v.expect, actual)
+		})
+	}
+
+}
