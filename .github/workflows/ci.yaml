@@ -20,6 +20,7 @@ jobs:
           skip-pkg-cache: true
       - name: Build Go binary
         run: |-
+          VERSION=${{ github.sha }}
           make build
       - name: Run Go Test
         run: |-
