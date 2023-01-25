@@ -159,16 +159,10 @@ func main() {
 var postMsgTmpl = template.Must(template.New("sendResult").Parse(`ロールの操作をしました。
 ロールを付与したユーザー
 {{ .Quote }}
-{{ range .AddNames }}
-{{- . }}
-{{ else }}いません{{- end }}
-{{ .Quote }}
+{{ range .AddNames }}{{- . }}{{ "\n" }}{{ else }}いません{{ "\n" }}{{- end }}{{ .Quote }}
 ロールを剥奪したユーザー
 {{ .Quote }}
-{{ range .RemoveNames }}
-{{- . }}
-{{ else }}いません{{ end }}
-{{ .Quote }}
+{{ range .RemoveNames }}{{- . }}{{ "\n" }}{{ else }}いません{{ "\n" }}{{- end }}{{ .Quote }}
 `))
 
 func CreateMsg(addUsers, removeUsers []string) (string, error) {
