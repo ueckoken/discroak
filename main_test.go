@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,15 +51,83 @@ func TestCreateMsg(t *testing.T) {
 		wantErr bool
 	}{
 		"exist input1 and input2": {
-			input1:  []string{"a", "b", "c"},
-			input2:  []string{"z", "y", "x"},
-			expect:  "ロールの操作をしました。\nロールを付与したユーザー\n```\na\nb\nc\n```\nロールを剥奪したユーザー\n```\nz\ny\nx\n```\n",
+			input1: []string{"a", "b", "c"},
+			input2: []string{"z", "y", "x"},
+			expect: strings.Join([]string{
+				"ロールの操作をしました。",
+				"ロールを付与したユーザー",
+				"```",
+				"a",
+				"b",
+				"c",
+				"",
+				"```",
+				"ロールを剥奪したユーザー",
+				"```",
+				"z",
+				"y",
+				"x",
+				"",
+				"```",
+				"",
+			}, "\n"),
+			wantErr: false,
+		},
+		"exist input1 and not exist input2": {
+			input1: []string{"a", "b", "c"},
+			input2: []string{},
+			expect: strings.Join([]string{
+				"ロールの操作をしました。",
+				"ロールを付与したユーザー",
+				"```",
+				"a",
+				"b",
+				"c",
+				"",
+				"```",
+				"ロールを剥奪したユーザー",
+				"```",
+				"いません",
+				"```",
+				"",
+			}, "\n"),
+			wantErr: false,
+		},
+		"not exist input1 and exist input2": {
+			input1: []string{},
+			input2: []string{"z", "y", "x"},
+			expect: strings.Join([]string{
+				"ロールの操作をしました。",
+				"ロールを付与したユーザー",
+				"```",
+				"いません",
+				"```",
+				"ロールを剥奪したユーザー",
+				"```",
+				"z",
+				"y",
+				"x",
+				"",
+				"```",
+				"",
+			}, "\n"),
 			wantErr: false,
 		},
 		"no exist input1 and input2": {
-			input1:  []string{},
-			input2:  []string{},
-			expect:  "ロールの操作をしました。\nロールを付与したユーザー\n```\n```\nロールを剥奪したユーザー\n```\n```\n",
+			input1: []string{},
+			input2: []string{},
+			expect: strings.Join([]string{
+				"ロールの操作をしました。",
+				"ロールを付与したユーザー",
+				"```",
+				"いません",
+				"```",
+				"ロールを剥奪したユーザー",
+				"```",
+				"いません",
+				"```",
+				"",
+			}, "\n"),
 			wantErr: false,
 		},
 	}
