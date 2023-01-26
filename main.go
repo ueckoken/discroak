@@ -50,7 +50,8 @@ type DiscordConf struct {
 	Token           string
 	GuildID         string
 	RoleID          string
-	NotifyChannelID string `envconfig:"optional"`
+	NotifyChannelID string   `envconfig:"optional"`
+	IgnoreUserIDs   []string `envconfig:"optional"`
 }
 
 var Config Conf
@@ -134,16 +135,23 @@ func main() {
 	removeRoleTargets := goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID })
 	logger.Info("role remove users", zap.Stringers("users", removeRoleTargets))
 
-	lo.ForEach(addRoleTargets, func(item *discordgo.User, _ int) {
-		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
-		}
-	})
-	lo.ForEach(removeRoleTargets, func(item *discordgo.User, _ int) {
-		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-		}
-	})
+	// 無視するべきIDを除外して、ロール操作を実行
+	lo.ForEach(
+		lo.Filter(addRoleTargets, func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) }),
+		func(item *discordgo.User, _ int) {
+			if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
+			}
+		})
+
+	lo.ForEach(
+		lo.Filter(removeRoleTargets, func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) }),
+		func(item *discordgo.User, _ int) {
+			if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+				logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+			}
+		})
+
 	logger.Info("task is over!",
 		zap.Stringers("role add users", addRoleTargets),
 		zap.Stringers("role remove users", removeRoleTargets),
