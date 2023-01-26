@@ -51,13 +51,20 @@ type DiscordConf struct {
 	GuildID         string
 	RoleID          string
 	NotifyChannelID string `envconfig:"optional"`
+	// separated by `,`
+	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 }
 
-var Config Conf
 var Version = "snapshot"
 
+func parseConfig() (*Conf, error) {
+	var Config Conf
+	err := envconfig.Init(&Config)
+	return &Config, err
+}
 func main() {
-	if err := envconfig.InitWithOptions(&Config, envconfig.Options{}); err != nil {
+	Config, err := parseConfig()
+	if err != nil {
 		panic(err)
 	}
 	logger := zap.Must(func() (*zap.Logger, error) {
@@ -134,16 +141,23 @@ func main() {
 	removeRoleTargets := goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID })
 	logger.Info("role remove users", zap.Stringers("users", removeRoleTargets))
 
-	lo.ForEach(addRoleTargets, func(item *discordgo.User, _ int) {
-		if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
-		}
-	})
-	lo.ForEach(removeRoleTargets, func(item *discordgo.User, _ int) {
-		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-		}
-	})
+	// 無視するべきIDを除外して、ロール操作を実行
+	lo.ForEach(
+		lo.Filter(addRoleTargets, func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) }),
+		func(item *discordgo.User, _ int) {
+			if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
+			}
+		})
+
+	lo.ForEach(
+		lo.Filter(removeRoleTargets, func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) }),
+		func(item *discordgo.User, _ int) {
+			if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+				logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+			}
+		})
+
 	logger.Info("task is over!",
 		zap.Stringers("role add users", addRoleTargets),
 		zap.Stringers("role remove users", removeRoleTargets),
@@ -222,7 +236,7 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 }
 
 func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string, screenName string) (*discordgo.User, error) {
-	members, err := sess.GuildMembers(Config.Discord.GuildID, "", 1000)
+	members, err := sess.GuildMembers(guildID, "", 1000)
 	if err != nil {
 		return nil, fmt.Errorf("guildmember fetch failed,err=`%w`", err)
 	}
