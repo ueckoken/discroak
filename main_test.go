@@ -5,7 +5,73 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestParseConfig(t *testing.T) {
+	testPatterns := map[string]struct {
+		envs    map[string]string
+		expect  *Conf
+		wantErr bool
+	}{
+		"no env": {
+			envs:    make(map[string]string),
+			wantErr: true,
+			expect:  nil,
+		},
+		"fill all": {
+			envs: map[string]string{
+				"KEYCLOAK_ENDPOINT":    "1",
+				"KEYCLOAK_USERNAME":    "1",
+				"KEYCLOAK_PASSWORD":    "1",
+				"KEYCLOAK_LOGIN_REALM": "1",
+				"KEYCLOAK_USER_REALM":  "1",
+				"KEYCLOAK_ATTRS_KEY":   "1",
+				"KEYCLOAK_GROUP_PATH":  "1",
+				"DISCORD_TOKEN":        "1",
+				"DISCORD_GUILD_ID":     "1",
+				"DISCORD_ROLE_ID":      "1",
+			},
+			wantErr: false,
+			expect: &Conf{
+				Log: LogConf{
+					Level:         new(MyLogLevel),
+					IsDevelopment: false,
+				},
+				Keycloak: KeycloakConf{
+					EndPoint:   "1",
+					UserName:   "1",
+					Password:   "1",
+					LoginRealm: "1",
+					UserRealm:  "1",
+					AttrsKey:   "1",
+					GroupPath:  "1",
+				},
+				Discord: DiscordConf{
+					Token:           "1",
+					GuildID:         "1",
+					RoleID:          "1",
+					NotifyChannelID: "",
+					IgnoreUserIDs:   nil,
+				},
+			},
+		},
+	}
+	for k, v := range testPatterns {
+		t.Run(k, func(t *testing.T) {
+			for key, val := range v.envs {
+				t.Setenv(key, val)
+			}
+			actual, err := parseConfig()
+			if v.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, v.expect, actual)
+			}
+		})
+	}
+}
 
 func TestDiscordUserParse(t *testing.T) {
 	testPatterns := map[string]struct {

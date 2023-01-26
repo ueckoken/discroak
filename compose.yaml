@@ -9,12 +9,13 @@ services:
       KEYCLOAK_USERNAME: admin
       KEYCLOAK_PASSWORD: admin
       KEYCLOAK_LOGIN_REALM: master
-      KEYCLOAK_USER_REALM: 
+      KEYCLOAK_USER_REALM:
       KEYCLOAK_ATTRS_KEY: discord-username
       KEYCLOAK_GROUP_PATH:
       DISCORD_TOKEN:
       DISCORD_GUILD_ID:
       DISCORD_ROLE_ID:
+      DISCORD_IGNORE_USER_IDS: "1234,4567"
     depends_on:
       keycloak:
         condition: service_healthy

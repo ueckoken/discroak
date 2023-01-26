@@ -50,15 +50,21 @@ type DiscordConf struct {
 	Token           string
 	GuildID         string
 	RoleID          string
-	NotifyChannelID string   `envconfig:"optional"`
-	IgnoreUserIDs   []string `envconfig:"optional"`
+	NotifyChannelID string `envconfig:"optional"`
+	// separated by `,`
+	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 }
 
-var Config Conf
 var Version = "snapshot"
 
+func parseConfig() (*Conf, error) {
+	var Config Conf
+	err := envconfig.Init(&Config)
+	return &Config, err
+}
 func main() {
-	if err := envconfig.InitWithOptions(&Config, envconfig.Options{}); err != nil {
+	Config, err := parseConfig()
+	if err != nil {
 		panic(err)
 	}
 	logger := zap.Must(func() (*zap.Logger, error) {
@@ -230,7 +236,7 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 }
 
 func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string, screenName string) (*discordgo.User, error) {
-	members, err := sess.GuildMembers(Config.Discord.GuildID, "", 1000)
+	members, err := sess.GuildMembers(guildID, "", 1000)
 	if err != nil {
 		return nil, fmt.Errorf("guildmember fetch failed,err=`%w`", err)
 	}
