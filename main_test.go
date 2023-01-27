@@ -19,6 +19,43 @@ func TestParseConfig(t *testing.T) {
 			wantErr: true,
 			expect:  nil,
 		},
+		"insert array": {
+			envs: map[string]string{
+				"KEYCLOAK_ENDPOINT":       "1",
+				"KEYCLOAK_USERNAME":       "1",
+				"KEYCLOAK_PASSWORD":       "1",
+				"KEYCLOAK_LOGIN_REALM":    "1",
+				"KEYCLOAK_USER_REALM":     "1",
+				"KEYCLOAK_ATTRS_KEY":      "1",
+				"KEYCLOAK_GROUP_PATH":     "1",
+				"DISCORD_TOKEN":           "1",
+				"DISCORD_GUILD_ID":        "1",
+				"DISCORD_ROLE_ID":         "1",
+				"DISCORD_IGNORE_USER_IDS": "1234,5678",
+			},
+			expect: &Conf{
+				Log: LogConf{
+					Level:         new(MyLogLevel),
+					IsDevelopment: false,
+				},
+				Keycloak: KeycloakConf{
+					EndPoint:   "1",
+					UserName:   "1",
+					Password:   "1",
+					LoginRealm: "1",
+					UserRealm:  "1",
+					AttrsKey:   "1",
+					GroupPath:  "1",
+				},
+				Discord: DiscordConf{
+					Token:           "1",
+					GuildID:         "1",
+					RoleID:          "1",
+					NotifyChannelID: "",
+					IgnoreUserIDs:   []string{"1234", "5678"},
+				},
+			},
+		},
 		"fill all": {
 			envs: map[string]string{
 				"KEYCLOAK_ENDPOINT":    "1",
@@ -72,7 +109,6 @@ func TestParseConfig(t *testing.T) {
 		})
 	}
 }
-
 func TestDiscordUserParse(t *testing.T) {
 	testPatterns := map[string]struct {
 		input         string
