@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html/template"
 	"regexp"
-	"text/template"
 
+	"github.com/Masterminds/sprig/v3"
 	"github.com/Nerzal/gocloak/v12"
 	"github.com/azuki-bar/goset"
 	"github.com/bwmarrin/discordgo"
@@ -14,6 +15,7 @@ import (
 	"github.com/vrischmann/envconfig"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/exp/utf8string"
 )
 
 type Conf struct {
@@ -176,16 +178,26 @@ func main() {
 	}
 }
 
-var postMsgTmpl = template.Must(template.New("sendResult").Parse(`ロールの操作をしました。
+var postMsgTmpl = template.Must(
+	template.New("sendResult").Funcs(sprig.FuncMap()).Parse(`ロールの操作をしました。
+{{- if .AddNames }}
 ロールを付与したユーザー
 {{ .Quote }}
-{{ range .AddNames }}{{- . }}{{ "\n" }}{{ else }}いません{{ "\n" }}{{- end }}{{ .Quote }}
+{{ .AddNames | join "\n" }}
+{{ .Quote }}
+{{- end }}
+{{- if .RemoveNames }}
 ロールを剥奪したユーザー
 {{ .Quote }}
-{{ range .RemoveNames }}{{- . }}{{ "\n" }}{{ else }}いません{{ "\n" }}{{- end }}{{ .Quote }}
+{{ .RemoveNames | join "\n" }}
+{{ .Quote }}
+{{- end }}
 `))
 
 func CreateMsg(addUsers, removeUsers []string) (string, error) {
+	if len(addUsers) == 0 && len(removeUsers) == 0 {
+		return "", fmt.Errorf("no users")
+	}
 	buf := new(bytes.Buffer)
 	msgStr := struct {
 		Quote       string
@@ -213,7 +225,8 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 	if err != nil {
 		return err
 	}
-	_, err = session.ChannelMessageSend(channelID, content)
+	// 2000 is limit of discord post
+	_, err = session.ChannelMessageSend(channelID, utf8string.NewString(content).Slice(0, 2000))
 	return err
 }
 
