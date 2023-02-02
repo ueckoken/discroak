@@ -57,7 +57,11 @@ type DiscordConf struct {
 	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 }
 
-var Version = "snapshot"
+var (
+	version = "snapshot"
+	commit  = ""
+	date    = ""
+)
 
 func parseConfig() (*Conf, error) {
 	var Config Conf
@@ -65,6 +69,7 @@ func parseConfig() (*Conf, error) {
 	return &Config, err
 }
 func main() {
+	fmt.Print(version)
 	Config, err := parseConfig()
 	if err != nil {
 		panic(err)
@@ -75,7 +80,12 @@ func main() {
 		}
 		return zap.NewProduction(zap.IncreaseLevel(zapcore.Level(*Config.Log.Level)))
 	}())
-	logger.Info("init logger successful", zap.Stringer("loglevel", logger.Level()), zap.String("version", Version))
+	logger.Info("init logger successful",
+		zap.Stringer("loglevel", logger.Level()),
+		zap.String("version", version),
+		zap.String("commit", commit),
+		zap.String("buildDate", date),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
