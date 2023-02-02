@@ -69,7 +69,6 @@ func parseConfig() (*Conf, error) {
 	return &Config, err
 }
 func main() {
-	fmt.Print(version)
 	Config, err := parseConfig()
 	if err != nil {
 		panic(err)
