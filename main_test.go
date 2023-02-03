@@ -212,7 +212,7 @@ func TestCreateMsg(t *testing.T) {
 	}
 	for k, v := range testCases {
 		t.Run(k, func(t *testing.T) {
-			t.Parallel()
+			v := v
 			actual, err := CreateMsg(v.input1, v.input2)
 			if v.wantErr {
 				assert.Error(t, err)
