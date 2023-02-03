@@ -57,9 +57,10 @@ type DiscordConf struct {
 	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 }
 
+// filled by goreleaser
 var (
 	version = "snapshot"
-	commit  = ""
+	commit  = "snapshot"
 	date    = ""
 )
 
@@ -156,9 +157,6 @@ func main() {
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
 		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
-	logger.Info("add role users", zap.Stringers("users", addRoleTargets))
-	logger.Info("role remove users", zap.Stringers("users", removeRoleTargets))
-
 	lo.ForEach(
 		addRoleTargets,
 		func(item *discordgo.User, _ int) {
@@ -166,7 +164,6 @@ func main() {
 				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 			}
 		})
-
 	lo.ForEach(
 		removeRoleTargets,
 		func(item *discordgo.User, _ int) {
@@ -188,7 +185,10 @@ func main() {
 }
 
 var postMsgTmpl = template.Must(
-	template.New("sendResult").Funcs(sprig.FuncMap()).Parse(`ロールの操作をしました。
+	template.
+		New("sendResult").
+		Funcs(sprig.FuncMap()).
+		Parse(`ロールの操作をしました。
 {{- if .AddNames }}
 ロールを付与したユーザー
 {{ .Quote }}
@@ -205,7 +205,7 @@ var postMsgTmpl = template.Must(
 
 func CreateMsg(addUsers, removeUsers []string) (string, error) {
 	if len(addUsers) == 0 && len(removeUsers) == 0 {
-		return "", fmt.Errorf("no users")
+		return "", nil
 	}
 	buf := new(bytes.Buffer)
 	msgStr := struct {
@@ -234,8 +234,15 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 	if err != nil {
 		return err
 	}
+	// safeSlice similar to s.Slice(0,len) but safe for out of index.
+	safeSlice := func(s *utf8string.String, len int) string {
+		if s.RuneCount() > len {
+			s.Slice(0, len)
+		}
+		return s.Slice(0, s.RuneCount())
+	}
 	// 2000 is limit of discord post
-	_, err = session.ChannelMessageSend(channelID, utf8string.NewString(content).Slice(0, 2000))
+	_, err = session.ChannelMessageSend(channelID, safeSlice(utf8string.NewString(content), 2000))
 	return err
 }
 
