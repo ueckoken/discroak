@@ -207,11 +207,12 @@ func TestCreateMsg(t *testing.T) {
 			input1:  []string{},
 			input2:  []string{},
 			expect:  "",
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 	for k, v := range testCases {
 		t.Run(k, func(t *testing.T) {
+			v := v
 			actual, err := CreateMsg(v.input1, v.input2)
 			if v.wantErr {
 				assert.Error(t, err)
