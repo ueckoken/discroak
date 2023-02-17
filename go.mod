@@ -11,7 +11,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/vrischmann/envconfig v1.3.0
 	go.uber.org/zap v1.24.0
-	golang.org/x/exp v0.0.0-20230202163644-54bba9f4231b
+	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
 )
 
 require (
