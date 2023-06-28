@@ -21,7 +21,7 @@ services:
         condition: service_healthy
 
   keycloak:
-    image: quay.io/keycloak/keycloak:20.0.3
+    image: quay.io/keycloak/keycloak:21.1.2
     command: ["start-dev"]
     environment:
       KEYCLOAK_ADMIN: admin
