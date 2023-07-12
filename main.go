@@ -153,10 +153,10 @@ func main() {
 		// 無視するべきIDを除外する
 		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
-	removeRoleTargets := lo.Filter(
-		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
-		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
-	)
+	// removeRoleTargets := lo.Filter(
+	// 	goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
+	// 	func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+	// )
 	lo.ForEach(
 		addRoleTargets,
 		func(item *discordgo.User, _ int) {
@@ -164,13 +164,15 @@ func main() {
 				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 			}
 		})
-	lo.ForEach(
-		removeRoleTargets,
-		func(item *discordgo.User, _ int) {
-			if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-				logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-			}
-		})
+	// lo.ForEach(
+	// 	removeRoleTargets,
+	// 	func(item *discordgo.User, _ int) {
+	// 		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+	// 			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+	// 		}
+	// 	})
+	// 上手く動かないので一時的にロール削除を無効化する
+	removeRoleTargets := []*discordgo.User{}
 
 	logger.Info("task is over!",
 		zap.Stringers("role add users", addRoleTargets),
