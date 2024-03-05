@@ -1,4 +1,4 @@
-FROM golang:1.20.1 AS Builder
+FROM golang:1.22.1 AS Builder
 
 ARG VERSION=snapshot
 WORKDIR /app
