@@ -301,6 +301,10 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
+	// name shoud be 2-32 characters
+	if utf8string.NewString(usernameRaw).RuneCount() < 2 || utf8string.NewString(usernameRaw).RuneCount() > 32 {
+		return "", "", fmt.Errorf("username length invalid")
+	}
 	if !usernameRe.MatchString(usernameRaw) {
 		// for new type username
 		return usernameRaw, "", nil
