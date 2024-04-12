@@ -122,10 +122,6 @@ func TestDiscordUserParse(t *testing.T) {
 			descriminator: "1234",
 			wantErr:       false,
 		},
-		"missmatch pattern": {
-			input:   "onlyname",
-			wantErr: true,
-		},
 		"misspattern": {
 			input:   `a`,
 			wantErr: true,
@@ -143,6 +139,12 @@ func TestDiscordUserParse(t *testing.T) {
 			assert.Equal(t, v.descriminator, d)
 		})
 	}
+	t.Run("new type username pattern", func(t *testing.T) {
+		u, d, err := DiscordUserParse("username")
+		assert.Empty(t, err)
+		assert.Equal(t, "username", u)
+		assert.Empty(t, d)
+	})
 }
 
 func TestCreateMsg(t *testing.T) {

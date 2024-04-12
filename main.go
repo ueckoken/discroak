@@ -153,10 +153,10 @@ func main() {
 		// 無視するべきIDを除外する
 		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
-	removeRoleTargets := lo.Filter(
-		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
-		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
-	)
+	// removeRoleTargets := lo.Filter(
+	// 	goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
+	// 	func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+	// )
 	lo.ForEach(
 		addRoleTargets,
 		func(item *discordgo.User, _ int) {
@@ -164,13 +164,15 @@ func main() {
 				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 			}
 		})
-	lo.ForEach(
-		removeRoleTargets,
-		func(item *discordgo.User, _ int) {
-			if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-				logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-			}
-		})
+	// lo.ForEach(
+	// 	removeRoleTargets,
+	// 	func(item *discordgo.User, _ int) {
+	// 		if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+	// 			logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+	// 		}
+	// 	})
+	// 上手く動かないので一時的にロール削除を無効化する
+	removeRoleTargets := []*discordgo.User{}
 
 	logger.Info("task is over!",
 		zap.Stringers("role add users", addRoleTargets),
@@ -280,7 +282,7 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 		return nil, fmt.Errorf("parse failed,err=`%w`", err)
 	}
 	users := lo.FilterMap(members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
-		if item.User.Username == name && item.User.Discriminator == discriminator {
+		if (item.User.Username == name && item.User.Discriminator == discriminator) || (item.User.ID == name && item.User.Discriminator == "") {
 			return item.User, true
 		}
 		return nil, false
@@ -299,6 +301,14 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
+	// name shoud be 2-32 characters
+	if utf8string.NewString(usernameRaw).RuneCount() < 2 || utf8string.NewString(usernameRaw).RuneCount() > 32 {
+		return "", "", fmt.Errorf("username length invalid")
+	}
+	if !usernameRe.MatchString(usernameRaw) {
+		// for new type username
+		return usernameRaw, "", nil
+	}
 	parsed := usernameRe.FindStringSubmatch(usernameRaw)
 	switch len(parsed) {
 	case 0, 1, 2:
