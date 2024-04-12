@@ -282,7 +282,7 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 		return nil, fmt.Errorf("parse failed,err=`%w`", err)
 	}
 	users := lo.FilterMap(members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
-		if item.User.Username == name && item.User.Discriminator == discriminator {
+		if (item.User.Username == name && item.User.Discriminator == discriminator) || (item.User.ID == name && item.User.Discriminator == "") {
 			return item.User, true
 		}
 		return nil, false
@@ -301,6 +301,10 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
+	if !usernameRe.MatchString(usernameRaw) {
+		// for new type username
+		return usernameRaw, "", nil
+	}
 	parsed := usernameRe.FindStringSubmatch(usernameRaw)
 	switch len(parsed) {
 	case 0, 1, 2:
