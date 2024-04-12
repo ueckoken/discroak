@@ -307,7 +307,7 @@ func DiscordUserParse(usernameRaw string) (username, discriminator string, err e
 	}
 	if !usernameRe.MatchString(usernameRaw) {
 		// for new type username
-		return usernameRaw, "", nil
+		return usernameRaw, "0", nil
 	}
 	parsed := usernameRe.FindStringSubmatch(usernameRaw)
 	switch len(parsed) {
