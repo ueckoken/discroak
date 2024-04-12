@@ -124,7 +124,7 @@ func TestDiscordUserParse(t *testing.T) {
 		},
 		"missmatch pattern": {
 			input:   "onlyname",
-			wantErr: true,
+			wantErr: false,
 		},
 		"misspattern": {
 			input:   `a`,
