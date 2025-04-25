@@ -123,8 +123,14 @@ func TestDiscordUserParse(t *testing.T) {
 			wantErr:       false,
 		},
 		"invalid discord ID - too short": {
-			input:   "12345678901234567",
+			input:   "1234567890123456", // 16桁（17桁未満）は無効
 			wantErr: true,
+		},
+		"valid discord ID - minimum length": {
+			input:         "12345678901234567", // 17桁は有効
+			username:      "12345678901234567",
+			descriminator: "",
+			wantErr:       false,
 		},
 		"invalid discord ID - too long": {
 			input:   "12345678901234567890123",
