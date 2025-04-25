@@ -237,7 +237,7 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 	// safeSlice similar to s.Slice(0,len) but safe for out of index.
 	safeSlice := func(s *utf8string.String, len int) string {
 		if s.RuneCount() > len {
-			s.Slice(0, len)
+			return s.Slice(0, len)
 		}
 		return s.Slice(0, s.RuneCount())
 	}
@@ -279,7 +279,7 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 	if err != nil {
 		return nil, fmt.Errorf("parse failed,err=`%w`", err)
 	}
-	
+
 	// まずDiscord IDで検索を試みる
 	if discordIDRe.MatchString(name) {
 		for _, item := range members {
@@ -288,7 +288,7 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 			}
 		}
 	}
-	
+
 	// IDで見つからなかった場合は従来の方法で検索
 	users := lo.FilterMap(members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
 		if (item.User.Username == name && item.User.Discriminator == discriminator) || (item.User.ID == name && item.User.Discriminator == "") {
@@ -316,7 +316,7 @@ func DiscordUserParse(usernameRaw string) (username, discriminator string, err e
 		// If it's a Discord ID, return it as username with empty discriminator
 		return usernameRaw, "", nil
 	}
-	
+
 	// name shoud be 2-32 characters
 	if utf8string.NewString(usernameRaw).RuneCount() < 2 || utf8string.NewString(usernameRaw).RuneCount() > 32 {
 		return "", "", fmt.Errorf("username length invalid")

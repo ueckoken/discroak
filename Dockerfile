@@ -5,7 +5,7 @@ WORKDIR /app
 COPY go.sum go.mod ./
 RUN go mod download
 COPY . ./
-RUN make build
+RUN make build VERSION=$VERSION
 
 FROM gcr.io/distroless/static-debian11:nonroot AS Runner
 
