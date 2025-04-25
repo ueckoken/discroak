@@ -119,7 +119,7 @@ func main() {
 		discordUsers := lo.FilterMap(discordUsernames, func(item string, _ int) (*discordgo.User, bool) {
 			user, err := ScreenName2user(logger, sess, guild.ID, item)
 			if err != nil {
-				logger.Warn("user not found", zap.Error(err), zap.String("discord username", item))
+				logger.Warn("user not found", zap.Error(err), zap.String("discord ID", item))
 				return nil, false
 			}
 			return user, true
@@ -281,12 +281,12 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 	if err != nil {
 		return nil, fmt.Errorf("guildmember fetch failed,err=`%w`", err)
 	}
-	name, discriminator, err := DiscordUserParse(screenName)
+	name, _, err := DiscordUserParse(screenName)
 	if err != nil {
 		return nil, fmt.Errorf("parse failed,err=`%w`", err)
 	}
 
-	// まずDiscord IDで検索を試みる
+	// Discord IDのみで検索する
 	if discordIDRe.MatchString(name) {
 		for _, item := range members {
 			if item.User.ID == name {
@@ -295,49 +295,19 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 		}
 	}
 
-	// IDで見つからなかった場合は従来の方法で検索
-	users := lo.FilterMap(members, func(item *discordgo.Member, _ int) (*discordgo.User, bool) {
-		if (item.User.Username == name && item.User.Discriminator == discriminator) || (item.User.ID == name && item.User.Discriminator == "") {
-			return item.User, true
-		}
-		return nil, false
-	})
-	switch len(users) {
-	case 0:
-		return nil, fmt.Errorf("user not found")
-	case 1:
-		return users[0], nil
-	default:
-		logger.Info("match multipue users", zap.Stringers("users", users))
-		return users[0], nil
-	}
+	// Discord IDでない場合はエラーを返す
+	return nil, fmt.Errorf("invalid Discord ID format or user not found: %s", name)
 }
 
 var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
 var discordIDRe = regexp.MustCompile(`^\d{17,20}$`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
-	// Check if input is a Discord ID (17-20 digits)
+	// Discord IDのみを受け付ける (17-20桁の数字)
 	if discordIDRe.MatchString(usernameRaw) {
-		// If it's a Discord ID, return it as username with empty discriminator
 		return usernameRaw, "", nil
 	}
 
-	// name shoud be 2-32 characters
-	if utf8string.NewString(usernameRaw).RuneCount() < 2 || utf8string.NewString(usernameRaw).RuneCount() > 32 {
-		return "", "", fmt.Errorf("username length invalid")
-	}
-	if !usernameRe.MatchString(usernameRaw) {
-		// for new type username
-		return usernameRaw, "", nil
-	}
-	parsed := usernameRe.FindStringSubmatch(usernameRaw)
-	switch len(parsed) {
-	case 0, 1, 2:
-		return "", "", fmt.Errorf("parsed failed, no group match")
-	case 3:
-		return parsed[1], parsed[2], nil
-	default:
-		return "", "", fmt.Errorf("parse failed")
-	}
+	// Discord IDでない場合はエラーを返す
+	return "", "", fmt.Errorf("input is not a valid Discord ID (must be 17-20 digits)")
 }
