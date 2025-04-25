@@ -116,14 +116,26 @@ func TestDiscordUserParse(t *testing.T) {
 		descriminator string
 		wantErr       bool
 	}{
-		"multibyte": {
-			input:         "テスト#1234",
-			username:      "テスト",
-			descriminator: "1234",
+		"valid discord ID": {
+			input:         "123456789012345678",
+			username:      "123456789012345678",
+			descriminator: "",
 			wantErr:       false,
 		},
-		"misspattern": {
-			input:   `a`,
+		"invalid discord ID - too short": {
+			input:   "12345678901234567",
+			wantErr: true,
+		},
+		"invalid discord ID - too long": {
+			input:   "12345678901234567890123",
+			wantErr: true,
+		},
+		"invalid discord ID - contains non-digit": {
+			input:   "12345678901234567a",
+			wantErr: true,
+		},
+		"invalid discord ID - username format": {
+			input:   "テスト#1234",
 			wantErr: true,
 		},
 	}
@@ -139,12 +151,6 @@ func TestDiscordUserParse(t *testing.T) {
 			assert.Equal(t, v.descriminator, d)
 		})
 	}
-	t.Run("new type username pattern", func(t *testing.T) {
-		u, d, err := DiscordUserParse("username")
-		assert.Empty(t, err)
-		assert.Equal(t, "username", u)
-		assert.Equal(t, "", d)
-	})
 }
 
 func TestCreateMsg(t *testing.T) {
