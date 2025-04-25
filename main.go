@@ -225,9 +225,15 @@ func CreateMsg(addUsers, removeUsers []string) (string, error) {
 
 func PostResult(session *discordgo.Session, channelID string, addUsers, removeUsers []*discordgo.User) error {
 	addUsersScreen := lo.Map(addUsers, func(user *discordgo.User, _ int) string {
+		if user.Discriminator == "" || user.Discriminator == "0" {
+			return user.Username
+		}
 		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
 	})
 	deleteUsersScreen := lo.Map(removeUsers, func(user *discordgo.User, _ int) string {
+		if user.Discriminator == "" || user.Discriminator == "0" {
+			return user.Username
+		}
 		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
 	})
 	content, err := CreateMsg(addUsersScreen, deleteUsersScreen)
@@ -323,7 +329,7 @@ func DiscordUserParse(usernameRaw string) (username, discriminator string, err e
 	}
 	if !usernameRe.MatchString(usernameRaw) {
 		// for new type username
-		return usernameRaw, "0", nil
+		return usernameRaw, "", nil
 	}
 	parsed := usernameRe.FindStringSubmatch(usernameRaw)
 	switch len(parsed) {
