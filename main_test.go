@@ -143,7 +143,7 @@ func TestDiscordUserParse(t *testing.T) {
 		u, d, err := DiscordUserParse("username")
 		assert.Empty(t, err)
 		assert.Equal(t, "username", u)
-		assert.Equal(t, "0", d)
+		assert.Equal(t, "", d)
 	})
 }
 
