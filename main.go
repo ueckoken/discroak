@@ -55,6 +55,8 @@ type DiscordConf struct {
 	NotifyChannelID string `envconfig:"optional"`
 	// separated by `,`
 	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
+	// DisableRoleRemoval disables the role removal feature when set to true
+	DisableRoleRemoval bool `envconfig:"optional,default=false"`
 }
 
 // filled by goreleaser
@@ -164,22 +166,41 @@ func main() {
 				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 			}
 		})
-	lo.ForEach(
-		removeRoleTargets,
-		func(item *discordgo.User, _ int) {
-			if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-				logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-			}
-		})
+	// ロール剥奪処理は DisableRoleRemoval が false の場合のみ実行
+	if !Config.Discord.DisableRoleRemoval {
+		lo.ForEach(
+			removeRoleTargets,
+			func(item *discordgo.User, _ int) {
+				if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+					logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+				}
+			})
+	} else {
+		logger.Info("role removal is disabled by configuration")
+	}
 
-	logger.Info("task is over!",
-		zap.Stringers("role add users", addRoleTargets),
-		zap.Stringers("role remove users", removeRoleTargets),
-	)
-	if Config.Discord.NotifyChannelID != "" && (len(addRoleTargets) != 0 || len(removeRoleTargets) != 0) {
-		err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, removeRoleTargets)
-		if err != nil {
-			logger.Error("post role modify info failed", zap.Error(err))
+	if !Config.Discord.DisableRoleRemoval {
+		logger.Info("task is over!",
+			zap.Stringers("role add users", addRoleTargets),
+			zap.Stringers("role remove users", removeRoleTargets),
+		)
+	} else {
+		logger.Info("task is over! (role removal disabled)",
+			zap.Stringers("role add users", addRoleTargets),
+			zap.Stringers("role remove candidates (not removed)", removeRoleTargets),
+		)
+	}
+	if Config.Discord.NotifyChannelID != "" {
+		var notifyRemoveUsers []*discordgo.User
+		if !Config.Discord.DisableRoleRemoval {
+			notifyRemoveUsers = removeRoleTargets
+		}
+		
+		if len(addRoleTargets) != 0 || len(notifyRemoveUsers) != 0 {
+			err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers)
+			if err != nil {
+				logger.Error("post role modify info failed", zap.Error(err))
+			}
 		}
 	}
 }
