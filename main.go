@@ -125,12 +125,22 @@ func main() {
 			return keycloakUser{}, false
 		}
 		discordUsers := lo.FilterMap(discordUsernames, func(item string, _ int) (*discordgo.User, bool) {
-			user, err := ScreenName2user(logger, sess, guild.ID, item)
-			if err != nil {
-				logger.Warn("user not found", zap.Error(err), zap.String("discord ID", item))
+			if !discordIDRe.MatchString(item) {
+				logger.Warn("invalid discord ID format", zap.String("discord ID", item))
 				return nil, false
 			}
-			return user, true
+			members, err := sess.GuildMembers(guild.ID, "", 1000)
+			if err != nil {
+				logger.Warn("guildmember fetch failed", zap.Error(err), zap.String("discord ID", item))
+				return nil, false
+			}
+			for _, member := range members {
+				if member.User.ID == item {
+					return member.User, true
+				}
+			}
+			logger.Warn("user not found", zap.String("discord ID", item))
+			return nil, false
 		})
 		return keycloakUser{
 			KeycloakUser: user,
@@ -327,28 +337,6 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 	return keycloakUsers, nil
 }
 
-func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string, screenName string) (*discordgo.User, error) {
-	members, err := sess.GuildMembers(guildID, "", 1000)
-	if err != nil {
-		return nil, fmt.Errorf("guildmember fetch failed,err=`%w`", err)
-	}
-	name, _, err := DiscordUserParse(screenName)
-	if err != nil {
-		return nil, fmt.Errorf("parse failed,err=`%w`", err)
-	}
-
-	// Discord IDのみで検索する
-	if discordIDRe.MatchString(name) {
-		for _, item := range members {
-			if item.User.ID == name {
-				return item.User, nil
-			}
-		}
-	}
-
-	// Discord IDでない場合はエラーを返す
-	return nil, fmt.Errorf("invalid Discord ID format or user not found: %s", name)
-}
 
 var discordIDRe = regexp.MustCompile(`^\d{17,20}$`)
 
