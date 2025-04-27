@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"regexp"
+	"sync"
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/Nerzal/gocloak/v12"
@@ -87,6 +88,11 @@ func main() {
 		zap.String("version", version),
 		zap.String("commit", commit),
 		zap.String("buildDate", date),
+		zap.String("discord.guildID", Config.Discord.GuildID),
+		zap.String("discord.roleID", Config.Discord.RoleID),
+		zap.String("discord.notifyChannelID", Config.Discord.NotifyChannelID),
+		zap.Bool("discord.disableRoleRemoval", Config.Discord.DisableRoleRemoval),
+		zap.Strings("discord.ignoreUserIDs", Config.Discord.IgnoreUserIDs),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -159,22 +165,47 @@ func main() {
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
 		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
-	lo.ForEach(
-		addRoleTargets,
-		func(item *discordgo.User, _ int) {
-			if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-				logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
+	// 並列数を制限するためのworker pool
+	const maxWorkers = 5
+	addCh := make(chan *discordgo.User)
+	var addWg sync.WaitGroup
+	for i := 0; i < maxWorkers; i++ {
+		addWg.Add(1)
+		go func() {
+			defer addWg.Done()
+			for item := range addCh {
+				if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+					logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
+				}
 			}
-		})
+		}()
+	}
+	for _, item := range addRoleTargets {
+		addCh <- item
+	}
+	close(addCh)
+	addWg.Wait()
+
 	// ロール剥奪処理は DisableRoleRemoval が false の場合のみ実行
 	if !Config.Discord.DisableRoleRemoval {
-		lo.ForEach(
-			removeRoleTargets,
-			func(item *discordgo.User, _ int) {
-				if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
-					logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+		removeCh := make(chan *discordgo.User)
+		var removeWg sync.WaitGroup
+		for i := 0; i < maxWorkers; i++ {
+			removeWg.Add(1)
+			go func() {
+				defer removeWg.Done()
+				for item := range removeCh {
+					if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+						logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+					}
 				}
-			})
+			}()
+		}
+		for _, item := range removeRoleTargets {
+			removeCh <- item
+		}
+		close(removeCh)
+		removeWg.Wait()
 	} else {
 		logger.Info("role removal is disabled by configuration")
 	}
