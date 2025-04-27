@@ -57,7 +57,7 @@ type DiscordConf struct {
 	// separated by `,`
 	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 	// DisableRoleRemoval disables the role removal feature when set to true
-	DisableRoleRemoval bool `envconfig:"optional,default=false"`
+	DisableRoleRemoval bool `envconfig:"optional,DISABLE_ROLE_REMOVAL,default=false"`
 }
 
 // filled by goreleaser
