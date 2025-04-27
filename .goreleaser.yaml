@@ -19,8 +19,8 @@ builds:
       - arm64
       - arm
     goarm:
-      - 6
-      - 7
+      - "6"
+      - "7"
 archives:
   - name_template: >-
       {{ .ProjectName }}_
@@ -29,9 +29,11 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
+    format: tar.gz
     format_overrides:
       - goos: windows
         format: zip
+
 dockers:
   - image_templates:
       - "ghcr.io/ueckoken/discroak:latest-amd64"
@@ -74,8 +76,7 @@ docker_manifests:
       - "ghcr.io/ueckoken/discroak:v{{ .Major }}.{{ .Minor }}-arm64"
 checksum:
   name_template: "checksums.txt"
-snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+# snapshotセクションは非推奨のため削除
 changelog:
   sort: asc
   filters:
