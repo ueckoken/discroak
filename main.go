@@ -195,7 +195,6 @@ func main() {
 		if !Config.Discord.DisableRoleRemoval {
 			notifyRemoveUsers = removeRoleTargets
 		}
-		
 		if len(addRoleTargets) != 0 || len(notifyRemoveUsers) != 0 {
 			err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers)
 			if err != nil {
@@ -320,7 +319,6 @@ func ScreenName2user(logger *zap.Logger, sess *discordgo.Session, guildID string
 	return nil, fmt.Errorf("invalid Discord ID format or user not found: %s", name)
 }
 
-var usernameRe = regexp.MustCompile(`(^.{2,32})#(\d{4}$)`)
 var discordIDRe = regexp.MustCompile(`^\d{17,20}$`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
