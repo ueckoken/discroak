@@ -1,6 +1,6 @@
 # 環境変数ドキュメント
 
-このドキュメントは、compose.yamlで設定されている環境変数の一覧と説明をまとめたものです。
+このドキュメントは、compose.yamlで設定されている環境変数の一覧と説明をまとめたものです。また、main.goのenvconfigタグで設定されている環境変数も含みます。
 
 ## appサービスの環境変数
 
@@ -19,6 +19,16 @@
 | DISCORD_GUILD_ID       | DiscordギルドID               | (未設定)                       |
 | DISCORD_ROLE_ID        | DiscordロールID               | (未設定)                       |
 | DISCORD_IGNORE_USER_IDS | Discordで無視するユーザーIDリスト | "1234,4567"                    |
+
+## main.goで設定されている環境変数
+
+| 変数名                 | 説明                             | デフォルト値 / 備考               |
+|------------------------|--------------------------------|---------------------------------|
+| LOG_LEVEL              | ログの出力レベル               | info (envconfigデフォルト)       |
+| LOG_IS_DEVELOPMENT     | 開発モードかどうかのフラグ     | false (envconfigデフォルト)      |
+| DISCORD_NOTIFY_CHANNEL_ID | Discordの通知チャンネルID      | (optional)                      |
+| DISCORD_IGNORE_USER_IDS | Discordで無視するユーザーIDリスト | (optional)                      |
+| DISABLE_ROLE_REMOVAL   | ロール削除機能を無効化するフラグ | false (optional, envconfigデフォルト) |
 
 ## keycloakサービスの環境変数
 
@@ -40,3 +50,5 @@
 | MYSQL_DATABASE         | MySQLのデータベース名           | keycloak                       |
 | MYSQL_USER             | MySQLのユーザー名               | keycloak                       |
 | MYSQL_PASSWORD         | MySQLのユーザーパスワード       | password                       |
+
+</content>
