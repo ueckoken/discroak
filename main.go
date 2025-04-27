@@ -169,11 +169,11 @@ func main() {
 	addRoleTargets := lo.Filter(
 		goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID }),
 		// 無視するべきIDを除外する
-		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
 	removeRoleTargets := lo.Filter(
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
-		func(user *discordgo.User, index int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
 	// 並列数を制限するためのworker pool
 	const maxWorkers = 5
