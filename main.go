@@ -337,7 +337,6 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 	return keycloakUsers, nil
 }
 
-
 var discordIDRe = regexp.MustCompile(`^\d{17,20}$`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
