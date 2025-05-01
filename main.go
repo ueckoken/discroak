@@ -337,14 +337,14 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 	return keycloakUsers, nil
 }
 
-var discordIDRe = regexp.MustCompile(`^\d{17,20}$`)
+var discordIDRe = regexp.MustCompile(`^\d+$`)
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
-	// Discord IDのみを受け付ける (17-20桁の数字)
+	// Discord IDのみを受け付ける (数字であればOK)
 	if discordIDRe.MatchString(usernameRaw) {
 		return usernameRaw, "", nil
 	}
 
 	// Discord IDでない場合はエラーを返す
-	return "", "", fmt.Errorf("input is not a valid Discord ID (must be 17-20 digits)")
+	return "", "", fmt.Errorf("input is not a valid Discord ID (must be numeric)")
 }
