@@ -330,7 +330,7 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 		return nil, fmt.Errorf("get group by path failed,err=`%w`", err)
 	}
 	logger.Debug("user in keycloak joined in group", zap.Any("group", group))
-	
+
 	// 最大 1000 件ずつ取って、足りなくなるまでループ
 	const pageSize = 1000
 	var allMembers []*gocloak.User
@@ -353,7 +353,7 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 			zap.Int("count", len(users)),
 			zap.Int("total_so_far", len(allMembers)))
 	}
-	
+
 	return allMembers, nil
 }
 
