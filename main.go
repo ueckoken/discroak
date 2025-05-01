@@ -330,11 +330,31 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 		return nil, fmt.Errorf("get group by path failed,err=`%w`", err)
 	}
 	logger.Debug("user in keycloak joined in group", zap.Any("group", group))
-	keycloakUsers, err := cloakClient.GetGroupMembers(ctx, token.AccessToken, conf.UserRealm, *group.ID, gocloak.GetGroupsParams{})
-	if err != nil {
-		return nil, fmt.Errorf("get users failed, err=`%w`", err)
+	
+	// 最大 1000 件ずつ取って、足りなくなるまでループ
+	const pageSize = 1000
+	var allMembers []*gocloak.User
+	for first := 0; ; first += pageSize {
+		params := gocloak.GetGroupsParams{
+			First: gocloak.IntP(first),
+			Max:   gocloak.IntP(pageSize),
+		}
+		users, err := cloakClient.GetGroupMembers(ctx, token.AccessToken,
+			conf.UserRealm, *group.ID, params)
+		if err != nil {
+			return nil, fmt.Errorf("get users failed, err=`%w`", err)
+		}
+		if len(users) == 0 {
+			break // 取り切った
+		}
+		allMembers = append(allMembers, users...)
+		logger.Debug("fetched keycloak users page",
+			zap.Int("page", first/pageSize),
+			zap.Int("count", len(users)),
+			zap.Int("total_so_far", len(allMembers)))
 	}
-	return keycloakUsers, nil
+	
+	return allMembers, nil
 }
 
 var discordIDRe = regexp.MustCompile(`^\d+$`)
