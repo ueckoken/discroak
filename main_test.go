@@ -53,7 +53,9 @@ func TestParseConfig(t *testing.T) {
 					RoleID:          "1",
 					NotifyChannelID: "",
 					IgnoreUserIDs:   []string{"1234", "5678"},
+					DisableRoleRemoval: false,
 				},
+				StateFilePath: "./discroak_state.json",
 			},
 		},
 		"fill all": {
@@ -90,7 +92,9 @@ func TestParseConfig(t *testing.T) {
 					RoleID:          "1",
 					NotifyChannelID: "",
 					IgnoreUserIDs:   nil,
+					DisableRoleRemoval: false,
 				},
+				StateFilePath: "./discroak_state.json",
 			},
 		},
 	}
@@ -123,9 +127,9 @@ func TestDiscordUserParse(t *testing.T) {
 			wantErr:       false,
 		},
 		"invalid discord ID - too short": {
-			input:   "1234567890123456", // 16桁（17桁未満）は無効だが、現在の実装では長さチェックなし
-			wantErr: false,
-			username: "1234567890123456",
+			input:         "1234567890123456", // 16桁（17桁未満）は無効だが、現在の実装では長さチェックなし
+			wantErr:       false,
+			username:      "1234567890123456",
 			descriminator: "",
 		},
 		"valid discord ID - minimum length": {
@@ -135,9 +139,9 @@ func TestDiscordUserParse(t *testing.T) {
 			wantErr:       false,
 		},
 		"invalid discord ID - too long": {
-			input:   "12345678901234567890123",
-			wantErr: false,
-			username: "12345678901234567890123",
+			input:         "12345678901234567890123",
+			wantErr:       false,
+			username:      "12345678901234567890123",
 			descriminator: "",
 		},
 		"invalid discord ID - contains non-digit": {

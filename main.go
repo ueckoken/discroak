@@ -171,7 +171,7 @@ func main() {
 		})
 	})
 	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
-	
+
 	// 前回の状態を読み込む
 	prevState, err := LoadState(Config.StateFilePath)
 	if err != nil {
@@ -182,25 +182,25 @@ func main() {
 			BuinUsers:       []string{},
 		}
 	}
-	
+
 	// 差分があるか確認
 	hasDiff := HasDiff(prevState, usersInKeycloak, buinUsers)
-	
+
 	// 現在の状態を保存
 	if err := SaveState(Config.StateFilePath, usersInKeycloak, buinUsers); err != nil {
 		logger.Warn("failed to save current state", zap.Error(err), zap.String("path", Config.StateFilePath))
 	} else {
 		logger.Info("saved current state to file", zap.String("path", Config.StateFilePath))
 	}
-	
+
 	// 差分がない場合は処理をスキップ
 	if !hasDiff {
 		logger.Info("no difference detected between previous and current state, skipping role operations")
 		return
 	}
-	
+
 	logger.Info("difference detected, proceeding with role operations")
-	
+
 	addRoleTargets := lo.Filter(
 		goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID }),
 		// 無視するべきIDを除外する
@@ -210,7 +210,7 @@ func main() {
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
 		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
-	
+
 	// 並列数を制限するためのworker pool
 	const maxWorkers = 5
 	addCh := make(chan *discordgo.User)
@@ -427,7 +427,7 @@ func HasDiff(prevState *StateData, currentKeycloakUsers, currentBuinUsers []*dis
 
 	// Keycloakユーザーの差分を確認
 	keycloakDiff := hasDiffInSlices(prevState.UsersInKeycloak, currentKeycloakIDs)
-	
+
 	// 部員ユーザーの差分を確認
 	buinDiff := hasDiffInSlices(prevState.BuinUsers, currentBuinIDs)
 
