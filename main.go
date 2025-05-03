@@ -100,6 +100,7 @@ func main() {
 		zap.Bool("discord.disableRoleRemoval", Config.Discord.DisableRoleRemoval),
 		zap.Strings("discord.ignoreUserIDs", Config.Discord.IgnoreUserIDs),
 		zap.String("stateFilePath", Config.StateFilePath),
+		zap.String("alternativeRoleID", Config.Discord.AlternativeRoleID),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
