@@ -235,15 +235,13 @@ func main() {
 				for item := range removeCh {
 					if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
 						logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-					} else {
+					} else if Config.Discord.AlternativeRoleID != "" {
 						// 代替ロールが設定されている場合は、そのロールを付与する
-						if Config.Discord.AlternativeRoleID != "" {
-							if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.AlternativeRoleID); err != nil {
-								logger.Error("alternative role add failed", zap.Error(err), zap.String("username", item.Username))
-							} else {
-								logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", Config.Discord.AlternativeRoleID))
-								resultCh <- item
-							}
+						if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.AlternativeRoleID); err != nil {
+							logger.Error("alternative role add failed", zap.Error(err), zap.String("username", item.Username))
+						} else {
+							logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", Config.Discord.AlternativeRoleID))
+							resultCh <- item
 						}
 					}
 				}
