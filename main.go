@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 
@@ -20,9 +23,10 @@ import (
 )
 
 type Conf struct {
-	Log      LogConf
-	Keycloak KeycloakConf
-	Discord  DiscordConf
+	Log           LogConf
+	Keycloak      KeycloakConf
+	Discord       DiscordConf
+	StateFilePath string `envconfig:"default=./discroak_state.json"`
 }
 type LogConf struct {
 	Level         *MyLogLevel `envconfig:"default=info"`
@@ -93,6 +97,7 @@ func main() {
 		zap.String("discord.notifyChannelID", Config.Discord.NotifyChannelID),
 		zap.Bool("discord.disableRoleRemoval", Config.Discord.DisableRoleRemoval),
 		zap.Strings("discord.ignoreUserIDs", Config.Discord.IgnoreUserIDs),
+		zap.String("stateFilePath", Config.StateFilePath),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,6 +171,36 @@ func main() {
 		})
 	})
 	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
+	
+	// 前回の状態を読み込む
+	prevState, err := LoadState(Config.StateFilePath)
+	if err != nil {
+		logger.Warn("failed to load previous state", zap.Error(err), zap.String("path", Config.StateFilePath))
+		// エラーが発生しても処理は続行
+		prevState = &StateData{
+			UsersInKeycloak: []string{},
+			BuinUsers:       []string{},
+		}
+	}
+	
+	// 差分があるか確認
+	hasDiff := HasDiff(prevState, usersInKeycloak, buinUsers)
+	
+	// 現在の状態を保存
+	if err := SaveState(Config.StateFilePath, usersInKeycloak, buinUsers); err != nil {
+		logger.Warn("failed to save current state", zap.Error(err), zap.String("path", Config.StateFilePath))
+	} else {
+		logger.Info("saved current state to file", zap.String("path", Config.StateFilePath))
+	}
+	
+	// 差分がない場合は処理をスキップ
+	if !hasDiff {
+		logger.Info("no difference detected between previous and current state, skipping role operations")
+		return
+	}
+	
+	logger.Info("difference detected, proceeding with role operations")
+	
 	addRoleTargets := lo.Filter(
 		goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID }),
 		// 無視するべきIDを除外する
@@ -175,6 +210,7 @@ func main() {
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
 		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
 	)
+	
 	// 並列数を制限するためのworker pool
 	const maxWorkers = 5
 	addCh := make(chan *discordgo.User)
@@ -316,6 +352,109 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 type keycloakUser struct {
 	KeycloakUser *gocloak.User
 	DiscordUsers []*discordgo.User
+}
+
+// StateData は前回の処理結果を保存するための構造体
+type StateData struct {
+	UsersInKeycloak []string `json:"users_in_keycloak"`
+	BuinUsers       []string `json:"buin_users"`
+}
+
+// SaveState は現在の状態をファイルに保存する
+func SaveState(filePath string, usersInKeycloak, buinUsers []*discordgo.User) error {
+	// ディレクトリが存在しない場合は作成
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// ユーザーIDのみを抽出
+	keycloakUserIDs := lo.Map(usersInKeycloak, func(user *discordgo.User, _ int) string {
+		return user.ID
+	})
+	buinUserIDs := lo.Map(buinUsers, func(user *discordgo.User, _ int) string {
+		return user.ID
+	})
+
+	state := StateData{
+		UsersInKeycloak: keycloakUserIDs,
+		BuinUsers:       buinUserIDs,
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal state data: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write state file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadState は前回の状態をファイルから読み込む
+func LoadState(filePath string) (*StateData, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// ファイルが存在しない場合は空の状態を返す
+			return &StateData{
+				UsersInKeycloak: []string{},
+				BuinUsers:       []string{},
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to read state file: %w", err)
+	}
+
+	var state StateData
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal state data: %w", err)
+	}
+
+	return &state, nil
+}
+
+// HasDiff は前回の状態と現在の状態に差分があるかどうかを確認する
+func HasDiff(prevState *StateData, currentKeycloakUsers, currentBuinUsers []*discordgo.User) bool {
+	// 現在のユーザーIDのみを抽出
+	currentKeycloakIDs := lo.Map(currentKeycloakUsers, func(user *discordgo.User, _ int) string {
+		return user.ID
+	})
+	currentBuinIDs := lo.Map(currentBuinUsers, func(user *discordgo.User, _ int) string {
+		return user.ID
+	})
+
+	// Keycloakユーザーの差分を確認
+	keycloakDiff := hasDiffInSlices(prevState.UsersInKeycloak, currentKeycloakIDs)
+	
+	// 部員ユーザーの差分を確認
+	buinDiff := hasDiffInSlices(prevState.BuinUsers, currentBuinIDs)
+
+	return keycloakDiff || buinDiff
+}
+
+// hasDiffInSlices は2つの文字列スライスに差分があるかどうかを確認する
+func hasDiffInSlices(slice1, slice2 []string) bool {
+	if len(slice1) != len(slice2) {
+		return true
+	}
+
+	// slice1の要素がslice2に含まれているかを確認
+	for _, item := range slice1 {
+		if !lo.Contains(slice2, item) {
+			return true
+		}
+	}
+
+	// slice2の要素がslice1に含まれているかを確認
+	for _, item := range slice2 {
+		if !lo.Contains(slice1, item) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakConf) ([]*gocloak.User, error) {
