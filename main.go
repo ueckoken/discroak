@@ -26,7 +26,7 @@ type Conf struct {
 	Log           LogConf
 	Keycloak      KeycloakConf
 	Discord       DiscordConf
-	StateFilePath string `envconfig:"default=./discroak_state.json"`
+	StateFilePath string `envconfig:"STATE_FILE_PATH,default=./discroak_state.json"`
 }
 type LogConf struct {
 	Level         *MyLogLevel `envconfig:"default=info"`
