@@ -102,75 +102,16 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Keycloakからユーザー情報を取得
 	keycloakUsers, err := fetchKeycloakUsers(ctx, logger, Config.Keycloak)
 	if err != nil {
 		logger.Fatal("fetch users in keycloak failed", zap.Error(err))
 	}
-	sess, err := discordgo.New("Bot " + Config.Discord.Token)
-	if err != nil {
-		logger.Fatal("discord login failed", zap.Error(err))
-	}
-	if err := sess.Open(); err != nil {
-		logger.Fatal("open websocket connection failed", zap.Error(err))
-	}
-	defer sess.Close()
-	guild, err := sess.Guild(Config.Discord.GuildID)
-	if err != nil {
-		logger.Fatal("discord guild fetch failed", zap.Error(err), zap.String("guildID", Config.Discord.GuildID))
-	}
-	keycloakCircleMembers := lo.FilterMap(keycloakUsers, func(user *gocloak.User, _ int) (keycloakUser, bool) {
-		if user.Attributes == nil {
-			logger.Info("user attributes not found", zap.Any("user", user))
-			return keycloakUser{}, false
-		}
-		attrs := *user.Attributes
-		discordUsernames, ok := attrs[Config.Keycloak.AttrsKey]
-		if !ok {
-			logger.Info("attribute not found", zap.String("attr key", Config.Keycloak.AttrsKey), zap.Stringer("user", user))
-			return keycloakUser{}, false
-		}
-		discordUsers := lo.FilterMap(discordUsernames, func(item string, _ int) (*discordgo.User, bool) {
-			if !discordIDRe.MatchString(item) {
-				logger.Warn("invalid discord ID format", zap.String("discord ID", item))
-				return nil, false
-			}
-			members, err := sess.GuildMembers(guild.ID, "", 1000)
-			if err != nil {
-				logger.Warn("guildmember fetch failed", zap.Error(err), zap.String("discord ID", item))
-				return nil, false
-			}
-			for _, member := range members {
-				if member.User.ID == item {
-					return member.User, true
-				}
-			}
-			logger.Warn("user not found", zap.String("discord ID", item))
-			return nil, false
-		})
-		return keycloakUser{
-			KeycloakUser: user,
-			DiscordUsers: discordUsers,
-		}, true
-	})
 
-	// aggredUsersのDiscordUsersに対してflatmapして集合を作る
-	// 部員ロール集合も持ってくる
-	// 1. flatten(DiscordUsers) - 部員 を作る
-	// 2. 部員ロール - flatten(DiscordUsers)を作る
-	// 1に含まれるユーザに対して部員ロールを付与
-	// 2に含まれるユーザに対して部員ロールを剥奪
-	usersInKeycloak := lo.FlatMap(keycloakCircleMembers, func(user keycloakUser, _ int) []*discordgo.User { return user.DiscordUsers })
-	logger.Debug("users in keycloak with attribute", zap.Any("users", usersInKeycloak))
-	members, err := sess.GuildMembers(guild.ID, "", 1000)
-	if err != nil {
-		logger.Error("fetch guild members error", zap.Error(err))
-	}
-	buinUsers := lo.FilterMap(members, func(member *discordgo.Member, _ int) (*discordgo.User, bool) {
-		return member.User, lo.ContainsBy(member.Roles, func(role string) bool {
-			return role == Config.Discord.RoleID
-		})
-	})
-	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
+	// KeycloakユーザーからDiscord IDを抽出（この時点ではDiscordに接続しない）
+	keycloakDiscordIDs := extractDiscordIDsFromKeycloak(logger, keycloakUsers, Config.Keycloak.AttrsKey)
+	logger.Debug("discord IDs extracted from keycloak", zap.Any("ids", keycloakDiscordIDs))
 
 	// 前回の状態を読み込む
 	prevState, err := LoadState(Config.StateFilePath)
@@ -183,23 +124,68 @@ func main() {
 		}
 	}
 
-	// 差分があるか確認
-	hasDiff := HasDiff(prevState, usersInKeycloak, buinUsers)
+	// 差分があるか確認（Discord接続前）
+	hasDiff := hasDiffInSlices(prevState.UsersInKeycloak, keycloakDiscordIDs)
 
-	// 現在の状態を保存
+	// 現在のKeycloak情報を保存
+	currentState := &StateData{
+		UsersInKeycloak: keycloakDiscordIDs,
+		BuinUsers:       prevState.BuinUsers, // この時点ではDiscordに接続していないので前回の情報を使用
+	}
+
+	// 差分がない場合は処理をスキップ
+	if !hasDiff {
+		logger.Info("no difference detected in keycloak users, skipping discord operations")
+		return
+	}
+
+	logger.Info("difference detected in keycloak users, connecting to discord")
+
+	// 差分がある場合のみDiscordに接続
+	sess, err := discordgo.New("Bot " + Config.Discord.Token)
+	if err != nil {
+		logger.Fatal("discord login failed", zap.Error(err))
+	}
+	if err := sess.Open(); err != nil {
+		logger.Fatal("open websocket connection failed", zap.Error(err))
+	}
+	defer sess.Close()
+
+	guild, err := sess.Guild(Config.Discord.GuildID)
+	if err != nil {
+		logger.Fatal("discord guild fetch failed", zap.Error(err), zap.String("guildID", Config.Discord.GuildID))
+	}
+
+	// Discordからユーザー情報を取得
+	members, err := sess.GuildMembers(guild.ID, "", 1000)
+	if err != nil {
+		logger.Error("fetch guild members error", zap.Error(err))
+	}
+
+	// KeycloakのDiscord IDに対応するDiscordユーザーを取得
+	keycloakCircleMembers := getKeycloakCircleMembers(logger, keycloakUsers, members, Config.Keycloak.AttrsKey)
+	usersInKeycloak := lo.FlatMap(keycloakCircleMembers, func(user keycloakUser, _ int) []*discordgo.User { return user.DiscordUsers })
+	logger.Debug("users in keycloak with attribute", zap.Any("users", usersInKeycloak))
+
+	// 特定のロールを持つDiscordユーザーを取得
+	buinUsers := lo.FilterMap(members, func(member *discordgo.Member, _ int) (*discordgo.User, bool) {
+		return member.User, lo.ContainsBy(member.Roles, func(role string) bool {
+			return role == Config.Discord.RoleID
+		})
+	})
+	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
+
+	// 現在の状態を更新して保存
+	currentState.BuinUsers = lo.Map(buinUsers, func(user *discordgo.User, _ int) string {
+		return user.ID
+	})
 	if err := SaveState(Config.StateFilePath, usersInKeycloak, buinUsers); err != nil {
 		logger.Warn("failed to save current state", zap.Error(err), zap.String("path", Config.StateFilePath))
 	} else {
 		logger.Info("saved current state to file", zap.String("path", Config.StateFilePath))
 	}
 
-	// 差分がない場合は処理をスキップ
-	if !hasDiff {
-		logger.Info("no difference detected between previous and current state, skipping role operations")
-		return
-	}
-
-	logger.Info("difference detected, proceeding with role operations")
+	logger.Info("proceeding with role operations")
 
 	addRoleTargets := lo.Filter(
 		goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID }),
@@ -354,6 +340,73 @@ type keycloakUser struct {
 	DiscordUsers []*discordgo.User
 }
 
+// extractDiscordIDsFromKeycloak はKeycloakユーザー情報からDiscord IDを抽出する
+func extractDiscordIDsFromKeycloak(logger *zap.Logger, keycloakUsers []*gocloak.User, attrsKey string) []string {
+	var discordIDs []string
+
+	for _, user := range keycloakUsers {
+		if user.Attributes == nil {
+			logger.Info("user attributes not found", zap.Any("user", user))
+			continue
+		}
+
+		attrs := *user.Attributes
+		discordUsernames, ok := attrs[attrsKey]
+		if !ok {
+			logger.Info("attribute not found", zap.String("attr key", attrsKey), zap.Stringer("user", user))
+			continue
+		}
+
+		for _, item := range discordUsernames {
+			if !discordIDRe.MatchString(item) {
+				logger.Warn("invalid discord ID format", zap.String("discord ID", item))
+				continue
+			}
+			discordIDs = append(discordIDs, item)
+		}
+	}
+
+	return discordIDs
+}
+
+// getKeycloakCircleMembers はKeycloakユーザー情報とDiscordメンバー情報から部員情報を取得する
+func getKeycloakCircleMembers(logger *zap.Logger, keycloakUsers []*gocloak.User, discordMembers []*discordgo.Member, attrsKey string) []keycloakUser {
+	return lo.FilterMap(keycloakUsers, func(user *gocloak.User, _ int) (keycloakUser, bool) {
+		if user.Attributes == nil {
+			logger.Info("user attributes not found", zap.Any("user", user))
+			return keycloakUser{}, false
+		}
+
+		attrs := *user.Attributes
+		discordUsernames, ok := attrs[attrsKey]
+		if !ok {
+			logger.Info("attribute not found", zap.String("attr key", attrsKey), zap.Stringer("user", user))
+			return keycloakUser{}, false
+		}
+
+		discordUsers := lo.FilterMap(discordUsernames, func(item string, _ int) (*discordgo.User, bool) {
+			if !discordIDRe.MatchString(item) {
+				logger.Warn("invalid discord ID format", zap.String("discord ID", item))
+				return nil, false
+			}
+
+			for _, member := range discordMembers {
+				if member.User.ID == item {
+					return member.User, true
+				}
+			}
+
+			logger.Warn("user not found", zap.String("discord ID", item))
+			return nil, false
+		})
+
+		return keycloakUser{
+			KeycloakUser: user,
+			DiscordUsers: discordUsers,
+		}, true
+	})
+}
+
 // StateData は前回の処理結果を保存するための構造体
 type StateData struct {
 	UsersInKeycloak []string `json:"users_in_keycloak"`
@@ -364,7 +417,7 @@ type StateData struct {
 func SaveState(filePath string, usersInKeycloak, buinUsers []*discordgo.User) error {
 	// ディレクトリが存在しない場合は作成
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -386,7 +439,7 @@ func SaveState(filePath string, usersInKeycloak, buinUsers []*discordgo.User) er
 		return fmt.Errorf("failed to marshal state data: %w", err)
 	}
 
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
