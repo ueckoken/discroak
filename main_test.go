@@ -171,12 +171,14 @@ func TestCreateMsg(t *testing.T) {
 	testCases := map[string]struct {
 		input1  []string
 		input2  []string
+		input3  []string
 		expect  string
 		wantErr bool
 	}{
 		"exist input1 and input2": {
 			input1: []string{"a", "b", "c"},
 			input2: []string{"z", "y", "x"},
+			input3: []string{},
 			expect: strings.Join([]string{
 				"ロールの操作をしました。",
 				"ロールを付与したユーザー",
@@ -198,6 +200,7 @@ func TestCreateMsg(t *testing.T) {
 		"exist input1 and not exist input2": {
 			input1: []string{"a", "b", "c"},
 			input2: []string{},
+			input3: []string{},
 			expect: strings.Join([]string{
 				"ロールの操作をしました。",
 				"ロールを付与したユーザー",
@@ -213,6 +216,7 @@ func TestCreateMsg(t *testing.T) {
 		"not exist input1 and exist input2": {
 			input1: []string{},
 			input2: []string{"z", "y", "x"},
+			input3: []string{},
 			expect: strings.Join([]string{
 				"ロールの操作をしました。",
 				"ロールを剥奪したユーザー",
@@ -228,6 +232,7 @@ func TestCreateMsg(t *testing.T) {
 		"no exist input1 and input2": {
 			input1:  []string{},
 			input2:  []string{},
+			input3:  []string{},
 			expect:  "",
 			wantErr: false,
 		},
@@ -235,7 +240,7 @@ func TestCreateMsg(t *testing.T) {
 	for k, v := range testCases {
 		t.Run(k, func(t *testing.T) {
 			v := v
-			actual, err := CreateMsg(v.input1, v.input2)
+			actual, err := CreateMsg(v.input1, v.input2, v.input3)
 			if v.wantErr {
 				assert.Error(t, err)
 			} else {

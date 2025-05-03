@@ -62,6 +62,8 @@ type DiscordConf struct {
 	IgnoreUserIDs []string `envconfig:"optional,DISCORD_IGNORE_USER_IDS"`
 	// DisableRoleRemoval disables the role removal feature when set to true
 	DisableRoleRemoval bool `envconfig:"optional,DISABLE_ROLE_REMOVAL,default=false"`
+	// AlternativeRoleID is the role ID to be assigned when a role is removed
+	AlternativeRoleID string `envconfig:"optional,ALTERNATIVE_ROLE_ID"`
 }
 
 // filled by goreleaser
@@ -218,9 +220,13 @@ func main() {
 	close(addCh)
 	addWg.Wait()
 
+	// 代替ロールが付与されたユーザーを追跡するためのリスト
+	var alternativeRoleTargets []*discordgo.User
+
 	// ロール剥奪処理は DisableRoleRemoval が false の場合のみ実行
 	if !Config.Discord.DisableRoleRemoval {
 		removeCh := make(chan *discordgo.User)
+		resultCh := make(chan *discordgo.User, len(removeRoleTargets))
 		var removeWg sync.WaitGroup
 		for i := 0; i < maxWorkers; i++ {
 			removeWg.Add(1)
@@ -229,6 +235,16 @@ func main() {
 				for item := range removeCh {
 					if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
 						logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
+					} else {
+						// 代替ロールが設定されている場合は、そのロールを付与する
+						if Config.Discord.AlternativeRoleID != "" {
+							if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.AlternativeRoleID); err != nil {
+								logger.Error("alternative role add failed", zap.Error(err), zap.String("username", item.Username))
+							} else {
+								logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", Config.Discord.AlternativeRoleID))
+								resultCh <- item
+							}
+						}
 					}
 				}
 			}()
@@ -238,6 +254,12 @@ func main() {
 		}
 		close(removeCh)
 		removeWg.Wait()
+
+		// 代替ロールが付与されたユーザーを収集
+		close(resultCh)
+		for item := range resultCh {
+			alternativeRoleTargets = append(alternativeRoleTargets, item)
+		}
 	} else {
 		logger.Info("role removal is disabled by configuration")
 	}
@@ -255,11 +277,13 @@ func main() {
 	}
 	if Config.Discord.NotifyChannelID != "" {
 		var notifyRemoveUsers []*discordgo.User
+		var notifyAlternativeUsers []*discordgo.User
 		if !Config.Discord.DisableRoleRemoval {
 			notifyRemoveUsers = removeRoleTargets
+			notifyAlternativeUsers = alternativeRoleTargets
 		}
-		if len(addRoleTargets) != 0 || len(notifyRemoveUsers) != 0 {
-			err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers)
+		if len(addRoleTargets) != 0 || len(notifyRemoveUsers) != 0 || len(notifyAlternativeUsers) != 0 {
+			err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers, notifyAlternativeUsers)
 			if err != nil {
 				logger.Error("post role modify info failed", zap.Error(err))
 			}
@@ -284,21 +308,29 @@ var postMsgTmpl = template.Must(
 {{ .RemoveNames | join "\n" }}
 {{ .Quote }}
 {{- end }}
+{{- if .AlternativeNames }}
+代替ロールを付与したユーザー
+{{ .Quote }}
+{{ .AlternativeNames | join "\n" }}
+{{ .Quote }}
+{{- end }}
 `))
 
-func CreateMsg(addUsers, removeUsers []string) (string, error) {
-	if len(addUsers) == 0 && len(removeUsers) == 0 {
+func CreateMsg(addUsers, removeUsers, alternativeUsers []string) (string, error) {
+	if len(addUsers) == 0 && len(removeUsers) == 0 && len(alternativeUsers) == 0 {
 		return "", nil
 	}
 	buf := new(bytes.Buffer)
 	msgStr := struct {
-		Quote       string
-		AddNames    []string
-		RemoveNames []string
+		Quote            string
+		AddNames         []string
+		RemoveNames      []string
+		AlternativeNames []string
 	}{
-		Quote:       "```",
-		AddNames:    addUsers,
-		RemoveNames: removeUsers,
+		Quote:            "```",
+		AddNames:         addUsers,
+		RemoveNames:      removeUsers,
+		AlternativeNames: alternativeUsers,
 	}
 	if err := postMsgTmpl.Execute(buf, msgStr); err != nil {
 		return "", err
@@ -306,7 +338,7 @@ func CreateMsg(addUsers, removeUsers []string) (string, error) {
 	return buf.String(), nil
 }
 
-func PostResult(session *discordgo.Session, channelID string, addUsers, removeUsers []*discordgo.User) error {
+func PostResult(session *discordgo.Session, channelID string, addUsers, removeUsers, alternativeUsers []*discordgo.User) error {
 	addUsersScreen := lo.Map(addUsers, func(user *discordgo.User, _ int) string {
 		if user.Discriminator == "" || user.Discriminator == "0" {
 			return user.Username
@@ -319,7 +351,13 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 		}
 		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
 	})
-	content, err := CreateMsg(addUsersScreen, deleteUsersScreen)
+	alternativeUsersScreen := lo.Map(alternativeUsers, func(user *discordgo.User, _ int) string {
+		if user.Discriminator == "" || user.Discriminator == "0" {
+			return user.Username
+		}
+		return fmt.Sprintf("%s#%s", user.Username, user.Discriminator)
+	})
+	content, err := CreateMsg(addUsersScreen, deleteUsersScreen, alternativeUsersScreen)
 	if err != nil {
 		return err
 	}
@@ -411,6 +449,8 @@ func getKeycloakCircleMembers(logger *zap.Logger, keycloakUsers []*gocloak.User,
 type StateData struct {
 	UsersInKeycloak []string `json:"users_in_keycloak"`
 	BuinUsers       []string `json:"buin_users"`
+	// 代替ロールが付与されたユーザーのリスト
+	AlternativeRoleUsers []string `json:"alternative_role_users"`
 }
 
 // SaveState は現在の状態をファイルに保存する

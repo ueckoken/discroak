@@ -29,6 +29,8 @@
 | DISCORD_NOTIFY_CHANNEL_ID | Discordの通知チャンネルID      | (optional)                      |
 | DISCORD_IGNORE_USER_IDS | Discordで無視するユーザーIDリスト | (optional)                      |
 | DISABLE_ROLE_REMOVAL   | ロール削除機能を無効化するフラグ | false (optional, envconfigデフォルト) |
+| ALTERNATIVE_ROLE_ID    | ロール削除時に代わりに付与するロールID | (optional)                      |
+| STATE_FILE_PATH        | 状態を保存するファイルのパス     | ./discroak_state.json (envconfigデフォルト) |
 
 ## keycloakサービスの環境変数
 
