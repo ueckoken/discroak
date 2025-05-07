@@ -7,8 +7,8 @@ require (
 	github.com/Nerzal/gocloak/v12 v12.0.0
 	github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd
 	github.com/bwmarrin/discordgo v0.27.0
-	github.com/samber/lo v1.37.0
-	github.com/stretchr/testify v1.8.1
+	github.com/samber/lo v1.50.0
+	github.com/stretchr/testify v1.10.0
 	github.com/vrischmann/envconfig v1.3.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
@@ -37,5 +37,6 @@ require (
 	golang.org/x/crypto v0.3.0 // indirect
 	golang.org/x/net v0.2.0 // indirect
 	golang.org/x/sys v0.2.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
