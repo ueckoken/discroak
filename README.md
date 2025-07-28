@@ -44,6 +44,22 @@ RUN_ONCE=true ./discroak
 | `DISABLE_ROLE_REMOVAL` | `false` | ロール削除の無効化 |
 | `ALTERNATIVE_ROLE_ID` | - | 代替ロールID（オプション） |
 
+### パフォーマンス設定
+
+| 変数名 | デフォルト値 | 説明 |
+|--------|-------------|------|
+| `MAX_WORKERS` | `2` | 並列処理の最大ワーカー数 |
+| `MIN_INTERVAL_DURATION` | `1m` | コマンドで設定可能な最小同期間隔 |
+| `COMMAND_CHANNEL_BUFFER` | `10` | コマンドチャンネルのバッファサイズ |
+
+### リトライ設定
+
+| 変数名 | デフォルト値 | 説明 |
+|--------|-------------|------|
+| `MAX_RETRIES` | `3` | 最大リトライ回数 |
+| `BASE_RETRY_DELAY` | `500ms` | 基本リトライ間隔 |
+| `CONNECTION_RETRY_DELAY` | `2s` | 接続リトライの基本間隔 |
+
 ### Keycloak設定
 
 | 変数名 | 説明 |
@@ -67,7 +83,7 @@ RUN_ONCE=true ./discroak
 ```
 /discroak-interval 10m    # 10分間隔に変更
 /discroak-interval 2h     # 2時間間隔に変更
-/discroak-interval 30s    # 30秒間隔に変更（最小1分）
+/discroak-interval 30s    # 30秒間隔に変更（最小間隔は設定可能）
 ```
 
 ### `/discroak-status`
@@ -138,7 +154,8 @@ docker run -d \
 ### レート制限
 
 - Discord API のレート制限に達した場合、自動的に待機して再試行します
-- 同時実行数は2に制限されています
+- 同時実行数はデフォルトで2に制限されていますが、`MAX_WORKERS`で変更可能
+- リトライ回数や間隔も環境変数で調整可能
 
 ### 設定の確認
 

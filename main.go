@@ -24,12 +24,19 @@ import (
 )
 
 type Conf struct {
-	Log           LogConf
-	Keycloak      KeycloakConf
-	Discord       DiscordConf
-	StateFilePath string        `envconfig:"STATE_FILE_PATH,default=./discroak_state.json"`
-	RunOnce       bool          `envconfig:"RUN_ONCE,default=false"`
-	CheckInterval time.Duration `envconfig:"CHECK_INTERVAL,default=5m"`
+	Log                 LogConf
+	Keycloak            KeycloakConf
+	Discord             DiscordConf
+	StateFilePath       string        `envconfig:"STATE_FILE_PATH,default=./discroak_state.json"`
+	RunOnce             bool          `envconfig:"RUN_ONCE,default=false"`
+	CheckInterval       time.Duration `envconfig:"CHECK_INTERVAL,default=5m"`
+	MaxWorkers          int           `envconfig:"MAX_WORKERS,default=2"`
+	MinIntervalDuration time.Duration `envconfig:"MIN_INTERVAL_DURATION,default=1m"`
+	// Retry configuration
+	MaxRetries           int           `envconfig:"MAX_RETRIES,default=3"`
+	BaseRetryDelay       time.Duration `envconfig:"BASE_RETRY_DELAY,default=500ms"`
+	ConnectionRetryDelay time.Duration `envconfig:"CONNECTION_RETRY_DELAY,default=2s"`
+	CommandChannelBuffer int           `envconfig:"COMMAND_CHANNEL_BUFFER,default=10"`
 }
 type LogConf struct {
 	Level         *MyLogLevel `envconfig:"default=info"`
@@ -106,6 +113,12 @@ func main() {
 		zap.String("alternativeRoleID", Config.Discord.AlternativeRoleID),
 		zap.Bool("runOnce", Config.RunOnce),
 		zap.Duration("checkInterval", Config.CheckInterval),
+		zap.Int("maxWorkers", Config.MaxWorkers),
+		zap.Duration("minIntervalDuration", Config.MinIntervalDuration),
+		zap.Int("maxRetries", Config.MaxRetries),
+		zap.Duration("baseRetryDelay", Config.BaseRetryDelay),
+		zap.Duration("connectionRetryDelay", Config.ConnectionRetryDelay),
+		zap.Int("commandChannelBuffer", Config.CommandChannelBuffer),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,7 +137,7 @@ func main() {
 	logger.Info("running in daemon mode", zap.Duration("interval", Config.CheckInterval))
 
 	// Discord セッションを作成し、常時接続を維持
-	sess, err := createDiscordSession(logger, Config.Discord.Token)
+	sess, err := createDiscordSession(Config, logger, Config.Discord.Token)
 	if err != nil {
 		logger.Fatal("discord session creation failed", zap.Error(err))
 	}
@@ -133,7 +146,7 @@ func main() {
 	logger.Info("discord session established, starting periodic sync")
 
 	// コマンドハンドラーを設定
-	commandCh := make(chan commandRequest, 10)
+	commandCh := make(chan commandRequest, Config.CommandChannelBuffer)
 	setupCommandHandlers(sess, commandCh, logger)
 
 	// スラッシュコマンドを登録
@@ -157,7 +170,7 @@ func main() {
 			logger.Info("context cancelled, shutting down")
 			return
 		case cmd := <-commandCh:
-			if err := handleCommand(cmd, &currentInterval, ticker, logger); err != nil {
+			if err := handleCommand(cmd, &currentInterval, ticker, Config, logger); err != nil {
 				logger.Error("command handling failed", zap.Error(err))
 			}
 		case <-ticker.C:
@@ -169,7 +182,7 @@ func main() {
 				if isConnectionError(err) {
 					logger.Warn("connection error detected, attempting to reconnect")
 					sess.Close()
-					newSess, reconnectErr := createDiscordSession(logger, Config.Discord.Token)
+					newSess, reconnectErr := createDiscordSession(Config, logger, Config.Discord.Token)
 					if reconnectErr != nil {
 						logger.Error("reconnection failed", zap.Error(reconnectErr))
 						continue
@@ -183,7 +196,7 @@ func main() {
 }
 
 func runSyncTask(ctx context.Context, logger *zap.Logger, config *Conf) error {
-	sess, err := createDiscordSession(logger, config.Discord.Token)
+	sess, err := createDiscordSession(config, logger, config.Discord.Token)
 	if err != nil {
 		return fmt.Errorf("discord session creation failed: %w", err)
 	}
@@ -267,7 +280,7 @@ func runSyncWithSession(ctx context.Context, logger *zap.Logger, config *Conf, s
 	)
 
 	// 並列数を制限するためのworker pool
-	const maxWorkers = 2
+	maxWorkers := config.MaxWorkers
 	addCh := make(chan *discordgo.User)
 	var addWg sync.WaitGroup
 	for i := 0; i < maxWorkers; i++ {
@@ -277,7 +290,7 @@ func runSyncWithSession(ctx context.Context, logger *zap.Logger, config *Conf, s
 			for item := range addCh {
 				if err := executeWithRateLimit(func() error {
 					return sess.GuildMemberRoleAdd(config.Discord.GuildID, item.ID, config.Discord.RoleID)
-				}, logger); err != nil {
+				}, config, logger); err != nil {
 					logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 				}
 			}
@@ -304,13 +317,13 @@ func runSyncWithSession(ctx context.Context, logger *zap.Logger, config *Conf, s
 				for item := range removeCh {
 					if err := executeWithRateLimit(func() error {
 						return sess.GuildMemberRoleRemove(config.Discord.GuildID, item.ID, config.Discord.RoleID)
-					}, logger); err != nil {
+					}, config, logger); err != nil {
 						logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
 					} else if config.Discord.AlternativeRoleID != "" {
 						// 代替ロールが設定されている場合は、そのロールを付与する
 						if err := executeWithRateLimit(func() error {
 							return sess.GuildMemberRoleAdd(config.Discord.GuildID, item.ID, config.Discord.AlternativeRoleID)
-						}, logger); err != nil {
+						}, config, logger); err != nil {
 							logger.Error("alternative role add failed", zap.Error(err), zap.String("username", item.Username))
 						} else {
 							logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", config.Discord.AlternativeRoleID))
@@ -425,10 +438,10 @@ func setupCommandHandlers(sess *discordgo.Session, commandCh chan<- commandReque
 	})
 }
 
-func handleCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, logger *zap.Logger) error {
+func handleCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, config *Conf, logger *zap.Logger) error {
 	switch cmd.Type {
 	case "interval":
-		return handleIntervalCommand(cmd, currentInterval, ticker, logger)
+		return handleIntervalCommand(cmd, currentInterval, ticker, config, logger)
 	case "status":
 		return handleStatusCommand(cmd, *currentInterval, logger)
 	case "help":
@@ -438,7 +451,7 @@ func handleCommand(cmd commandRequest, currentInterval *time.Duration, ticker *t
 	}
 }
 
-func handleIntervalCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, logger *zap.Logger) error {
+func handleIntervalCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, config *Conf, logger *zap.Logger) error {
 	if len(cmd.Args) == 0 {
 		return sendResponse(cmd, fmt.Sprintf("Current interval: %v", *currentInterval))
 	}
@@ -449,8 +462,8 @@ func handleIntervalCommand(cmd commandRequest, currentInterval *time.Duration, t
 		return sendResponse(cmd, fmt.Sprintf("Invalid duration format: %s. Use format like '5m', '30s', '1h'", intervalStr))
 	}
 
-	if newInterval < time.Minute {
-		return sendResponse(cmd, "Minimum interval is 1 minute.")
+	if newInterval < config.MinIntervalDuration {
+		return sendResponse(cmd, fmt.Sprintf("Minimum interval is %v.", config.MinIntervalDuration))
 	}
 
 	*currentInterval = newInterval
@@ -841,11 +854,8 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 
 var discordIDRe = regexp.MustCompile(`^\d+$`)
 
-func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
-	const maxRetries = 3
-	const baseDelay = time.Millisecond * 500
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
+func executeWithRateLimit(operation func() error, config *Conf, logger *zap.Logger) error {
+	for attempt := 0; attempt < config.MaxRetries; attempt++ {
 		err := operation()
 		if err == nil {
 			return nil
@@ -853,7 +863,7 @@ func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
 
 		// レート制限エラーの場合は待機時間を長くする
 		if isRateLimitError(err) {
-			delay := baseDelay * time.Duration(1<<attempt) * 2
+			delay := config.BaseRetryDelay * time.Duration(1<<attempt) * 2
 			logger.Warn("rate limit hit, retrying",
 				zap.Error(err),
 				zap.Int("attempt", attempt+1),
@@ -863,8 +873,8 @@ func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
 		}
 
 		// 他のエラーの場合は短い間隔でリトライ
-		if attempt < maxRetries-1 {
-			delay := baseDelay * time.Duration(1<<attempt)
+		if attempt < config.MaxRetries-1 {
+			delay := config.BaseRetryDelay * time.Duration(1<<attempt)
 			logger.Warn("operation failed, retrying",
 				zap.Error(err),
 				zap.Int("attempt", attempt+1),
@@ -876,7 +886,7 @@ func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
 		return err
 	}
 
-	return fmt.Errorf("operation failed after %d attempts", maxRetries)
+	return fmt.Errorf("operation failed after %d attempts", config.MaxRetries)
 }
 
 func isRateLimitError(err error) bool {
@@ -887,27 +897,24 @@ func isRateLimitError(err error) bool {
 	return regexp.MustCompile(`(?i)(rate limit|429|too many requests)`).MatchString(errStr)
 }
 
-func createDiscordSession(logger *zap.Logger, token string) (*discordgo.Session, error) {
-	const maxRetries = 3
-	const baseDelay = time.Second * 2
-
+func createDiscordSession(config *Conf, logger *zap.Logger, token string) (*discordgo.Session, error) {
 	var sess *discordgo.Session
 	var err error
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < config.MaxRetries; attempt++ {
 		sess, err = discordgo.New("Bot " + token)
 		if err != nil {
 			logger.Error("failed to create discord session",
 				zap.Error(err),
 				zap.Int("attempt", attempt+1))
 
-			if attempt < maxRetries-1 {
-				delay := baseDelay * time.Duration(1<<attempt)
+			if attempt < config.MaxRetries-1 {
+				delay := config.ConnectionRetryDelay * time.Duration(1<<attempt)
 				logger.Info("retrying discord session creation", zap.Duration("delay", delay))
 				time.Sleep(delay)
 				continue
 			}
-			return nil, fmt.Errorf("failed to create discord session after %d attempts: %w", maxRetries, err)
+			return nil, fmt.Errorf("failed to create discord session after %d attempts: %w", config.MaxRetries, err)
 		}
 
 		err = sess.Open()
@@ -916,13 +923,13 @@ func createDiscordSession(logger *zap.Logger, token string) (*discordgo.Session,
 				zap.Error(err),
 				zap.Int("attempt", attempt+1))
 
-			if attempt < maxRetries-1 {
-				delay := baseDelay * time.Duration(1<<attempt)
+			if attempt < config.MaxRetries-1 {
+				delay := config.ConnectionRetryDelay * time.Duration(1<<attempt)
 				logger.Info("retrying discord connection", zap.Duration("delay", delay))
 				time.Sleep(delay)
 				continue
 			}
-			return nil, fmt.Errorf("failed to open discord connection after %d attempts: %w", maxRetries, err)
+			return nil, fmt.Errorf("failed to open discord connection after %d attempts: %w", config.MaxRetries, err)
 		}
 
 		logger.Info("discord session created and connected successfully", zap.Int("attempts", attempt+1))
