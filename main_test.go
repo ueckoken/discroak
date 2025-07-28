@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,8 @@ func TestParseConfig(t *testing.T) {
 					DisableRoleRemoval: false,
 				},
 				StateFilePath: "./discroak_state.json",
+				RunOnce:       false,
+				CheckInterval: 5 * time.Minute,
 			},
 		},
 		"fill all": {
@@ -95,6 +98,8 @@ func TestParseConfig(t *testing.T) {
 					DisableRoleRemoval: false,
 				},
 				StateFilePath: "./discroak_state.json",
+				RunOnce:       false,
+				CheckInterval: 5 * time.Minute,
 			},
 		},
 	}
