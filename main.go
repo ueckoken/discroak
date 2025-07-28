@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/Masterminds/sprig/v3"
 	"github.com/Nerzal/gocloak/v12"
@@ -23,10 +24,19 @@ import (
 )
 
 type Conf struct {
-	Log           LogConf
-	Keycloak      KeycloakConf
-	Discord       DiscordConf
-	StateFilePath string `envconfig:"STATE_FILE_PATH,default=./discroak_state.json"`
+	Log                 LogConf
+	Keycloak            KeycloakConf
+	Discord             DiscordConf
+	StateFilePath       string        `envconfig:"STATE_FILE_PATH,default=./discroak_state.json"`
+	RunOnce             bool          `envconfig:"RUN_ONCE,default=false"`
+	CheckInterval       time.Duration `envconfig:"CHECK_INTERVAL,default=5m"`
+	MaxWorkers          int           `envconfig:"MAX_WORKERS,default=2"`
+	MinIntervalDuration time.Duration `envconfig:"MIN_INTERVAL_DURATION,default=1m"`
+	// Retry configuration
+	MaxRetries           int           `envconfig:"MAX_RETRIES,default=3"`
+	BaseRetryDelay       time.Duration `envconfig:"BASE_RETRY_DELAY,default=500ms"`
+	ConnectionRetryDelay time.Duration `envconfig:"CONNECTION_RETRY_DELAY,default=2s"`
+	CommandChannelBuffer int           `envconfig:"COMMAND_CHANNEL_BUFFER,default=10"`
 }
 type LogConf struct {
 	Level         *MyLogLevel `envconfig:"default=info"`
@@ -101,62 +111,135 @@ func main() {
 		zap.Strings("discord.ignoreUserIDs", Config.Discord.IgnoreUserIDs),
 		zap.String("stateFilePath", Config.StateFilePath),
 		zap.String("alternativeRoleID", Config.Discord.AlternativeRoleID),
+		zap.Bool("runOnce", Config.RunOnce),
+		zap.Duration("checkInterval", Config.CheckInterval),
+		zap.Int("maxWorkers", Config.MaxWorkers),
+		zap.Duration("minIntervalDuration", Config.MinIntervalDuration),
+		zap.Int("maxRetries", Config.MaxRetries),
+		zap.Duration("baseRetryDelay", Config.BaseRetryDelay),
+		zap.Duration("connectionRetryDelay", Config.ConnectionRetryDelay),
+		zap.Int("commandChannelBuffer", Config.CommandChannelBuffer),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Keycloakからユーザー情報を取得
-	keycloakUsers, err := fetchKeycloakUsers(ctx, logger, Config.Keycloak)
-	if err != nil {
-		logger.Fatal("fetch users in keycloak failed", zap.Error(err))
+	// 1回だけ実行モード
+	if Config.RunOnce {
+		logger.Info("running in one-time mode")
+		if err := runSyncTask(ctx, logger, Config); err != nil {
+			logger.Fatal("sync task failed", zap.Error(err))
+		}
+		return
 	}
 
-	// KeycloakユーザーからDiscord IDを抽出（この時点ではDiscordに接続しない）
-	keycloakDiscordIDs := extractDiscordIDsFromKeycloak(logger, keycloakUsers, Config.Keycloak.AttrsKey)
+	// 常時実行モード
+	logger.Info("running in daemon mode", zap.Duration("interval", Config.CheckInterval))
+
+	// Discord セッションを作成し、常時接続を維持
+	sess, err := createDiscordSession(Config, logger, Config.Discord.Token)
+	if err != nil {
+		logger.Fatal("discord session creation failed", zap.Error(err))
+	}
+	defer sess.Close()
+
+	logger.Info("discord session established, starting periodic sync")
+
+	// コマンドハンドラーを設定
+	commandCh := make(chan commandRequest, Config.CommandChannelBuffer)
+	setupCommandHandlers(sess, commandCh, logger)
+
+	// スラッシュコマンドを登録
+	if err := registerSlashCommands(sess, Config.Discord.GuildID, logger); err != nil {
+		logger.Error("failed to register slash commands", zap.Error(err))
+	}
+
+	currentInterval := Config.CheckInterval
+	ticker := time.NewTicker(currentInterval)
+	defer ticker.Stop()
+
+	// 初回実行
+	if err := runSyncWithSession(ctx, logger, Config, sess); err != nil {
+		logger.Error("initial sync failed", zap.Error(err))
+	}
+
+	// 定期実行
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("context cancelled, shutting down")
+			return
+		case cmd := <-commandCh:
+			if err := handleCommand(cmd, &currentInterval, ticker, Config, logger); err != nil {
+				logger.Error("command handling failed", zap.Error(err))
+			}
+		case <-ticker.C:
+			logger.Debug("running periodic sync")
+			if err := runSyncWithSession(ctx, logger, Config, sess); err != nil {
+				logger.Error("periodic sync failed", zap.Error(err))
+
+				// 接続エラーの場合は再接続を試行
+				if isConnectionError(err) {
+					logger.Warn("connection error detected, attempting to reconnect")
+					sess.Close()
+					newSess, reconnectErr := createDiscordSession(Config, logger, Config.Discord.Token)
+					if reconnectErr != nil {
+						logger.Error("reconnection failed", zap.Error(reconnectErr))
+						continue
+					}
+					sess = newSess
+					logger.Info("successfully reconnected to discord")
+				}
+			}
+		}
+	}
+}
+
+func runSyncTask(ctx context.Context, logger *zap.Logger, config *Conf) error {
+	sess, err := createDiscordSession(config, logger, config.Discord.Token)
+	if err != nil {
+		return fmt.Errorf("discord session creation failed: %w", err)
+	}
+	defer sess.Close()
+
+	return runSyncWithSession(ctx, logger, config, sess)
+}
+
+func runSyncWithSession(ctx context.Context, logger *zap.Logger, config *Conf, sess *discordgo.Session) error {
+	// Keycloakからユーザー情報を取得
+	keycloakUsers, err := fetchKeycloakUsers(ctx, logger, config.Keycloak)
+	if err != nil {
+		return fmt.Errorf("fetch users in keycloak failed: %w", err)
+	}
+
+	// KeycloakユーザーからDiscord IDを抽出
+	keycloakDiscordIDs := extractDiscordIDsFromKeycloak(logger, keycloakUsers, config.Keycloak.AttrsKey)
 	logger.Debug("discord IDs extracted from keycloak", zap.Any("ids", keycloakDiscordIDs))
 
 	// 前回の状態を読み込む
-	prevState, err := LoadState(Config.StateFilePath)
+	prevState, err := LoadState(config.StateFilePath)
 	if err != nil {
-		logger.Warn("failed to load previous state", zap.Error(err), zap.String("path", Config.StateFilePath))
-		// エラーが発生しても処理は続行
+		logger.Warn("failed to load previous state", zap.Error(err), zap.String("path", config.StateFilePath))
 		prevState = &StateData{
 			UsersInKeycloak: []string{},
 			BuinUsers:       []string{},
 		}
 	}
 
-	// 差分があるか確認（Discord接続前）
+	// 差分があるか確認
 	hasDiff := hasDiffInSlices(prevState.UsersInKeycloak, keycloakDiscordIDs)
-
-	// 現在のKeycloak情報を保存
-	currentState := &StateData{
-		UsersInKeycloak: keycloakDiscordIDs,
-		BuinUsers:       prevState.BuinUsers, // この時点ではDiscordに接続していないので前回の情報を使用
-	}
 
 	// 差分がない場合は処理をスキップ
 	if !hasDiff {
-		logger.Info("no difference detected in keycloak users, skipping discord operations")
-		return
+		logger.Debug("no difference detected in keycloak users, skipping discord operations")
+		return nil
 	}
 
-	logger.Info("difference detected in keycloak users, connecting to discord")
+	logger.Info("difference detected in keycloak users, processing changes")
 
-	// 差分がある場合のみDiscordに接続
-	sess, err := discordgo.New("Bot " + Config.Discord.Token)
+	guild, err := sess.Guild(config.Discord.GuildID)
 	if err != nil {
-		logger.Fatal("discord login failed", zap.Error(err))
-	}
-	if err := sess.Open(); err != nil {
-		logger.Fatal("open websocket connection failed", zap.Error(err))
-	}
-	defer sess.Close()
-
-	guild, err := sess.Guild(Config.Discord.GuildID)
-	if err != nil {
-		logger.Fatal("discord guild fetch failed", zap.Error(err), zap.String("guildID", Config.Discord.GuildID))
+		return fmt.Errorf("discord guild fetch failed: %w", err)
 	}
 
 	// Discordからユーザー情報を取得
@@ -166,42 +249,38 @@ func main() {
 	}
 
 	// KeycloakのDiscord IDに対応するDiscordユーザーを取得
-	keycloakCircleMembers := getKeycloakCircleMembers(logger, keycloakUsers, members, Config.Keycloak.AttrsKey)
+	keycloakCircleMembers := getKeycloakCircleMembers(logger, keycloakUsers, members, config.Keycloak.AttrsKey)
 	usersInKeycloak := lo.FlatMap(keycloakCircleMembers, func(user keycloakUser, _ int) []*discordgo.User { return user.DiscordUsers })
 	logger.Debug("users in keycloak with attribute", zap.Any("users", usersInKeycloak))
 
 	// 特定のロールを持つDiscordユーザーを取得
 	buinUsers := lo.FilterMap(members, func(member *discordgo.Member, _ int) (*discordgo.User, bool) {
 		return member.User, lo.ContainsBy(member.Roles, func(role string) bool {
-			return role == Config.Discord.RoleID
+			return role == config.Discord.RoleID
 		})
 	})
 	logger.Debug("users with specific roles in discord", zap.Any("users", buinUsers))
 
 	// 現在の状態を更新して保存
-	currentState.BuinUsers = lo.Map(buinUsers, func(user *discordgo.User, _ int) string {
-		return user.ID
-	})
-	if err := SaveState(Config.StateFilePath, usersInKeycloak, buinUsers); err != nil {
-		logger.Warn("failed to save current state", zap.Error(err), zap.String("path", Config.StateFilePath))
+	if err := SaveState(config.StateFilePath, usersInKeycloak, buinUsers); err != nil {
+		logger.Warn("failed to save current state", zap.Error(err), zap.String("path", config.StateFilePath))
 	} else {
-		logger.Info("saved current state to file", zap.String("path", Config.StateFilePath))
+		logger.Debug("saved current state to file", zap.String("path", config.StateFilePath))
 	}
 
 	logger.Info("proceeding with role operations")
 
 	addRoleTargets := lo.Filter(
 		goset.Difference(usersInKeycloak, buinUsers, func(key *discordgo.User) string { return key.ID }),
-		// 無視するべきIDを除外する
-		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+		func(user *discordgo.User, _ int) bool { return !lo.Contains(config.Discord.IgnoreUserIDs, user.ID) },
 	)
 	removeRoleTargets := lo.Filter(
 		goset.Difference(buinUsers, usersInKeycloak, func(key *discordgo.User) string { return key.ID }),
-		func(user *discordgo.User, _ int) bool { return !lo.Contains(Config.Discord.IgnoreUserIDs, user.ID) },
+		func(user *discordgo.User, _ int) bool { return !lo.Contains(config.Discord.IgnoreUserIDs, user.ID) },
 	)
 
 	// 並列数を制限するためのworker pool
-	const maxWorkers = 5
+	maxWorkers := config.MaxWorkers
 	addCh := make(chan *discordgo.User)
 	var addWg sync.WaitGroup
 	for i := 0; i < maxWorkers; i++ {
@@ -209,7 +288,9 @@ func main() {
 		go func() {
 			defer addWg.Done()
 			for item := range addCh {
-				if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+				if err := executeWithRateLimit(func() error {
+					return sess.GuildMemberRoleAdd(config.Discord.GuildID, item.ID, config.Discord.RoleID)
+				}, config, logger); err != nil {
 					logger.Error("role add failed", zap.Error(err), zap.String("username", item.Username))
 				}
 			}
@@ -225,7 +306,7 @@ func main() {
 	var alternativeRoleTargets []*discordgo.User
 
 	// ロール剥奪処理は DisableRoleRemoval が false の場合のみ実行
-	if !Config.Discord.DisableRoleRemoval {
+	if !config.Discord.DisableRoleRemoval {
 		removeCh := make(chan *discordgo.User)
 		resultCh := make(chan *discordgo.User, len(removeRoleTargets))
 		var removeWg sync.WaitGroup
@@ -234,14 +315,18 @@ func main() {
 			go func() {
 				defer removeWg.Done()
 				for item := range removeCh {
-					if err := sess.GuildMemberRoleRemove(Config.Discord.GuildID, item.ID, Config.Discord.RoleID); err != nil {
+					if err := executeWithRateLimit(func() error {
+						return sess.GuildMemberRoleRemove(config.Discord.GuildID, item.ID, config.Discord.RoleID)
+					}, config, logger); err != nil {
 						logger.Error("role delete failed", zap.Error(err), zap.String("username", item.Username))
-					} else if Config.Discord.AlternativeRoleID != "" {
+					} else if config.Discord.AlternativeRoleID != "" {
 						// 代替ロールが設定されている場合は、そのロールを付与する
-						if err := sess.GuildMemberRoleAdd(Config.Discord.GuildID, item.ID, Config.Discord.AlternativeRoleID); err != nil {
+						if err := executeWithRateLimit(func() error {
+							return sess.GuildMemberRoleAdd(config.Discord.GuildID, item.ID, config.Discord.AlternativeRoleID)
+						}, config, logger); err != nil {
 							logger.Error("alternative role add failed", zap.Error(err), zap.String("username", item.Username))
 						} else {
-							logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", Config.Discord.AlternativeRoleID))
+							logger.Info("alternative role added", zap.String("username", item.Username), zap.String("roleID", config.Discord.AlternativeRoleID))
 							resultCh <- item
 						}
 					}
@@ -263,31 +348,210 @@ func main() {
 		logger.Info("role removal is disabled by configuration")
 	}
 
-	if !Config.Discord.DisableRoleRemoval {
-		logger.Info("task is over!",
+	if !config.Discord.DisableRoleRemoval {
+		logger.Info("sync task completed",
 			zap.Stringers("role add users", addRoleTargets),
 			zap.Stringers("role remove users", removeRoleTargets),
 		)
 	} else {
-		logger.Info("task is over! (role removal disabled)",
+		logger.Info("sync task completed (role removal disabled)",
 			zap.Stringers("role add users", addRoleTargets),
 			zap.Stringers("role remove candidates (not removed)", removeRoleTargets),
 		)
 	}
-	if Config.Discord.NotifyChannelID != "" {
+
+	if config.Discord.NotifyChannelID != "" {
 		var notifyRemoveUsers []*discordgo.User
 		var notifyAlternativeUsers []*discordgo.User
-		if !Config.Discord.DisableRoleRemoval {
+		if !config.Discord.DisableRoleRemoval {
 			notifyRemoveUsers = removeRoleTargets
 			notifyAlternativeUsers = alternativeRoleTargets
 		}
 		if len(addRoleTargets) != 0 || len(notifyRemoveUsers) != 0 || len(notifyAlternativeUsers) != 0 {
-			err := PostResult(sess, Config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers, notifyAlternativeUsers)
+			err := PostResult(sess, config.Discord.NotifyChannelID, addRoleTargets, notifyRemoveUsers, notifyAlternativeUsers)
 			if err != nil {
 				logger.Error("post role modify info failed", zap.Error(err))
 			}
 		}
 	}
+
+	return nil
+}
+
+type commandRequest struct {
+	Type        string
+	Args        []string
+	ChannelID   string
+	Session     *discordgo.Session
+	Interaction *discordgo.InteractionCreate
+}
+
+func setupCommandHandlers(sess *discordgo.Session, commandCh chan<- commandRequest, logger *zap.Logger) {
+	// スラッシュコマンドハンドラー
+	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type != discordgo.InteractionApplicationCommand {
+			return
+		}
+
+		data := i.ApplicationCommandData()
+		var cmd commandRequest
+
+		switch data.Name {
+		case "discroak-interval":
+			args := []string{}
+			if len(data.Options) > 0 {
+				args = append(args, data.Options[0].StringValue())
+			}
+			cmd = commandRequest{
+				Type:        "interval",
+				Args:        args,
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		case "discroak-status":
+			cmd = commandRequest{
+				Type:        "status",
+				Args:        []string{},
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		case "discroak-help":
+			cmd = commandRequest{
+				Type:        "help",
+				Args:        []string{},
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		default:
+			return
+		}
+
+		select {
+		case commandCh <- cmd:
+			logger.Debug("slash command received", zap.String("type", cmd.Type), zap.Strings("args", cmd.Args))
+		default:
+			logger.Warn("command channel full, dropping slash command")
+		}
+	})
+}
+
+func handleCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, config *Conf, logger *zap.Logger) error {
+	switch cmd.Type {
+	case "interval":
+		return handleIntervalCommand(cmd, currentInterval, ticker, config, logger)
+	case "status":
+		return handleStatusCommand(cmd, *currentInterval, logger)
+	case "help":
+		return handleHelpCommand(cmd, logger)
+	default:
+		return sendResponse(cmd, "Unknown command. Use `/discroak-help` for available commands.")
+	}
+}
+
+func handleIntervalCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, config *Conf, logger *zap.Logger) error {
+	if len(cmd.Args) == 0 {
+		return sendResponse(cmd, fmt.Sprintf("Current interval: %v", *currentInterval))
+	}
+
+	intervalStr := cmd.Args[0]
+	newInterval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		return sendResponse(cmd, fmt.Sprintf("Invalid duration format: %s. Use format like '5m', '30s', '1h'", intervalStr))
+	}
+
+	if newInterval < config.MinIntervalDuration {
+		return sendResponse(cmd, fmt.Sprintf("Minimum interval is %v.", config.MinIntervalDuration))
+	}
+
+	*currentInterval = newInterval
+	ticker.Reset(newInterval)
+
+	logger.Info("interval updated via discord command",
+		zap.Duration("new_interval", newInterval),
+		zap.String("channel", cmd.ChannelID))
+
+	return sendResponse(cmd, fmt.Sprintf("Interval updated to: %v", newInterval))
+}
+
+func handleStatusCommand(cmd commandRequest, currentInterval time.Duration, _ *zap.Logger) error {
+	message := fmt.Sprintf("Bot Status:\nCurrent sync interval: %v\nBot is running in daemon mode", currentInterval)
+	return sendResponse(cmd, message)
+}
+
+func handleHelpCommand(cmd commandRequest, _ *zap.Logger) error {
+	helpText := `Available slash commands:
+- **/discroak-interval [duration]**: Set sync interval (e.g., '5m', '1h', '30s')
+- **/discroak-status**: Show current bot status
+- **/discroak-help**: Show this help message
+
+Examples:
+- /discroak-interval 10m
+- /discroak-interval 2h
+- /discroak-status`
+
+	return sendResponse(cmd, helpText)
+}
+
+func sendResponse(cmd commandRequest, message string) error {
+	if cmd.Interaction != nil {
+		// スラッシュコマンドの場合
+		return cmd.Session.InteractionRespond(cmd.Interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: message,
+			},
+		})
+	}
+	// テキストコマンドの場合（現在は使用されない）
+	_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, message)
+	return err
+}
+
+func registerSlashCommands(sess *discordgo.Session, guildID string, logger *zap.Logger) error {
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name:        "discroak-interval",
+			Description: "Set sync interval",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "duration",
+					Description: "Duration (e.g., '5m', '1h', '30s')",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "discroak-status",
+			Description: "Show current bot status",
+		},
+		{
+			Name:        "discroak-help",
+			Description: "Show available commands",
+		},
+	}
+
+	for _, cmd := range commands {
+		_, err := sess.ApplicationCommandCreate(sess.State.User.ID, guildID, cmd)
+		if err != nil {
+			logger.Error("failed to create slash command", zap.String("name", cmd.Name), zap.Error(err))
+			return err
+		}
+		logger.Info("registered slash command", zap.String("name", cmd.Name))
+	}
+
+	return nil
+}
+
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return regexp.MustCompile(`(?i)(connection|websocket|network|timeout|closed|eof)`).MatchString(errStr)
 }
 
 var postMsgTmpl = template.Must(
@@ -360,10 +624,10 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 	if err != nil {
 		return err
 	}
-	// safeSlice similar to s.Slice(0,len) but safe for out of index.
-	safeSlice := func(s *utf8string.String, len int) string {
-		if s.RuneCount() > len {
-			return s.Slice(0, len)
+	// safeSlice similar to s.Slice(0,length) but safe for out of index.
+	safeSlice := func(s *utf8string.String, length int) string {
+		if s.RuneCount() > length {
+			return s.Slice(0, length)
 		}
 		return s.Slice(0, s.RuneCount())
 	}
@@ -589,6 +853,91 @@ func fetchKeycloakUsers(ctx context.Context, logger *zap.Logger, conf KeycloakCo
 }
 
 var discordIDRe = regexp.MustCompile(`^\d+$`)
+
+func executeWithRateLimit(operation func() error, config *Conf, logger *zap.Logger) error {
+	for attempt := 0; attempt < config.MaxRetries; attempt++ {
+		err := operation()
+		if err == nil {
+			return nil
+		}
+
+		// レート制限エラーの場合は待機時間を長くする
+		if isRateLimitError(err) {
+			delay := config.BaseRetryDelay * time.Duration(1<<attempt) * 2
+			logger.Warn("rate limit hit, retrying",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1),
+				zap.Duration("delay", delay))
+			time.Sleep(delay)
+			continue
+		}
+
+		// 他のエラーの場合は短い間隔でリトライ
+		if attempt < config.MaxRetries-1 {
+			delay := config.BaseRetryDelay * time.Duration(1<<attempt)
+			logger.Warn("operation failed, retrying",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1),
+				zap.Duration("delay", delay))
+			time.Sleep(delay)
+			continue
+		}
+
+		return err
+	}
+
+	return fmt.Errorf("operation failed after %d attempts", config.MaxRetries)
+}
+
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return regexp.MustCompile(`(?i)(rate limit|429|too many requests)`).MatchString(errStr)
+}
+
+func createDiscordSession(config *Conf, logger *zap.Logger, token string) (*discordgo.Session, error) {
+	var sess *discordgo.Session
+	var err error
+
+	for attempt := 0; attempt < config.MaxRetries; attempt++ {
+		sess, err = discordgo.New("Bot " + token)
+		if err != nil {
+			logger.Error("failed to create discord session",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1))
+
+			if attempt < config.MaxRetries-1 {
+				delay := config.ConnectionRetryDelay * time.Duration(1<<attempt)
+				logger.Info("retrying discord session creation", zap.Duration("delay", delay))
+				time.Sleep(delay)
+				continue
+			}
+			return nil, fmt.Errorf("failed to create discord session after %d attempts: %w", config.MaxRetries, err)
+		}
+
+		err = sess.Open()
+		if err != nil {
+			logger.Error("failed to open discord connection",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1))
+
+			if attempt < config.MaxRetries-1 {
+				delay := config.ConnectionRetryDelay * time.Duration(1<<attempt)
+				logger.Info("retrying discord connection", zap.Duration("delay", delay))
+				time.Sleep(delay)
+				continue
+			}
+			return nil, fmt.Errorf("failed to open discord connection after %d attempts: %w", config.MaxRetries, err)
+		}
+
+		logger.Info("discord session created and connected successfully", zap.Int("attempts", attempt+1))
+		return sess, nil
+	}
+
+	return nil, err
+}
 
 func DiscordUserParse(usernameRaw string) (username, discriminator string, err error) {
 	// Discord IDのみを受け付ける (数字であればOK)

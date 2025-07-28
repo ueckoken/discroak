@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,15 @@ func TestParseConfig(t *testing.T) {
 					IgnoreUserIDs:      []string{"1234", "5678"},
 					DisableRoleRemoval: false,
 				},
-				StateFilePath: "./discroak_state.json",
+				StateFilePath:        "./discroak_state.json",
+				RunOnce:              false,
+				CheckInterval:        5 * time.Minute,
+				MaxWorkers:           2,
+				MinIntervalDuration:  1 * time.Minute,
+				MaxRetries:           3,
+				BaseRetryDelay:       500 * time.Millisecond,
+				ConnectionRetryDelay: 2 * time.Second,
+				CommandChannelBuffer: 10,
 			},
 		},
 		"fill all": {
@@ -94,7 +103,15 @@ func TestParseConfig(t *testing.T) {
 					IgnoreUserIDs:      nil,
 					DisableRoleRemoval: false,
 				},
-				StateFilePath: "./discroak_state.json",
+				StateFilePath:        "./discroak_state.json",
+				RunOnce:              false,
+				CheckInterval:        5 * time.Minute,
+				MaxWorkers:           2,
+				MinIntervalDuration:  1 * time.Minute,
+				MaxRetries:           3,
+				BaseRetryDelay:       500 * time.Millisecond,
+				ConnectionRetryDelay: 2 * time.Second,
+				CommandChannelBuffer: 10,
 			},
 		},
 	}
