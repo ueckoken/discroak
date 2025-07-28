@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -123,20 +122,25 @@ func main() {
 
 	// 常時実行モード
 	logger.Info("running in daemon mode", zap.Duration("interval", Config.CheckInterval))
-	
+
 	// Discord セッションを作成し、常時接続を維持
 	sess, err := createDiscordSession(logger, Config.Discord.Token)
 	if err != nil {
 		logger.Fatal("discord session creation failed", zap.Error(err))
 	}
 	defer sess.Close()
-	
+
 	logger.Info("discord session established, starting periodic sync")
-	
+
 	// コマンドハンドラーを設定
 	commandCh := make(chan commandRequest, 10)
 	setupCommandHandlers(sess, commandCh, logger)
-	
+
+	// スラッシュコマンドを登録
+	if err := registerSlashCommands(sess, Config.Discord.GuildID, logger); err != nil {
+		logger.Error("failed to register slash commands", zap.Error(err))
+	}
+
 	currentInterval := Config.CheckInterval
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
@@ -160,7 +164,7 @@ func main() {
 			logger.Debug("running periodic sync")
 			if err := runSyncWithSession(ctx, logger, Config, sess); err != nil {
 				logger.Error("periodic sync failed", zap.Error(err))
-				
+
 				// 接続エラーの場合は再接続を試行
 				if isConnectionError(err) {
 					logger.Warn("connection error detected, attempting to reconnect")
@@ -184,7 +188,7 @@ func runSyncTask(ctx context.Context, logger *zap.Logger, config *Conf) error {
 		return fmt.Errorf("discord session creation failed: %w", err)
 	}
 	defer sess.Close()
-	
+
 	return runSyncWithSession(ctx, logger, config, sess)
 }
 
@@ -357,45 +361,66 @@ func runSyncWithSession(ctx context.Context, logger *zap.Logger, config *Conf, s
 			}
 		}
 	}
-	
+
 	return nil
 }
 
 type commandRequest struct {
-	Type      string
-	Args      []string
-	ChannelID string
-	Session   *discordgo.Session
+	Type        string
+	Args        []string
+	ChannelID   string
+	Session     *discordgo.Session
+	Interaction *discordgo.InteractionCreate
 }
 
 func setupCommandHandlers(sess *discordgo.Session, commandCh chan<- commandRequest, logger *zap.Logger) {
-	sess.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		if m.Author.ID == s.State.User.ID {
+	// スラッシュコマンドハンドラー
+	sess.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type != discordgo.InteractionApplicationCommand {
 			return
 		}
 
-		content := m.Content
-		if !strings.HasPrefix(content, "!discroak") {
-			return
-		}
+		data := i.ApplicationCommandData()
+		var cmd commandRequest
 
-		parts := strings.Fields(content)
-		if len(parts) < 2 {
+		switch data.Name {
+		case "discroak-interval":
+			args := []string{}
+			if len(data.Options) > 0 {
+				args = append(args, data.Options[0].StringValue())
+			}
+			cmd = commandRequest{
+				Type:        "interval",
+				Args:        args,
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		case "discroak-status":
+			cmd = commandRequest{
+				Type:        "status",
+				Args:        []string{},
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		case "discroak-help":
+			cmd = commandRequest{
+				Type:        "help",
+				Args:        []string{},
+				ChannelID:   i.ChannelID,
+				Session:     s,
+				Interaction: i,
+			}
+		default:
 			return
-		}
-
-		cmd := commandRequest{
-			Type:      parts[1],
-			Args:      parts[2:],
-			ChannelID: m.ChannelID,
-			Session:   s,
 		}
 
 		select {
 		case commandCh <- cmd:
-			logger.Debug("command received", zap.String("type", cmd.Type), zap.Strings("args", cmd.Args))
+			logger.Debug("slash command received", zap.String("type", cmd.Type), zap.Strings("args", cmd.Args))
 		default:
-			logger.Warn("command channel full, dropping command")
+			logger.Warn("command channel full, dropping slash command")
 		}
 	})
 }
@@ -409,62 +434,103 @@ func handleCommand(cmd commandRequest, currentInterval *time.Duration, ticker *t
 	case "help":
 		return handleHelpCommand(cmd, logger)
 	default:
-		_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, "Unknown command. Use `!discroak help` for available commands.")
-		return err
+		return sendResponse(cmd, "Unknown command. Use `/discroak-help` for available commands.")
 	}
 }
 
 func handleIntervalCommand(cmd commandRequest, currentInterval *time.Duration, ticker *time.Ticker, logger *zap.Logger) error {
 	if len(cmd.Args) == 0 {
-		_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, fmt.Sprintf("Current interval: %v", *currentInterval))
-		return err
+		return sendResponse(cmd, fmt.Sprintf("Current interval: %v", *currentInterval))
 	}
 
 	intervalStr := cmd.Args[0]
 	newInterval, err := time.ParseDuration(intervalStr)
 	if err != nil {
-		_, sendErr := cmd.Session.ChannelMessageSend(cmd.ChannelID, fmt.Sprintf("Invalid duration format: %s. Use format like '5m', '30s', '1h'", intervalStr))
-		if sendErr != nil {
-			logger.Error("failed to send error message", zap.Error(sendErr))
-		}
-		return err
+		return sendResponse(cmd, fmt.Sprintf("Invalid duration format: %s. Use format like '5m', '30s', '1h'", intervalStr))
 	}
 
 	if newInterval < time.Minute {
-		_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, "Minimum interval is 1 minute.")
-		return err
+		return sendResponse(cmd, "Minimum interval is 1 minute.")
 	}
 
 	*currentInterval = newInterval
 	ticker.Reset(newInterval)
-	
-	logger.Info("interval updated via discord command", 
+
+	logger.Info("interval updated via discord command",
 		zap.Duration("new_interval", newInterval),
 		zap.String("channel", cmd.ChannelID))
 
-	_, err = cmd.Session.ChannelMessageSend(cmd.ChannelID, fmt.Sprintf("Interval updated to: %v", newInterval))
-	return err
+	return sendResponse(cmd, fmt.Sprintf("Interval updated to: %v", newInterval))
 }
 
-func handleStatusCommand(cmd commandRequest, currentInterval time.Duration, logger *zap.Logger) error {
+func handleStatusCommand(cmd commandRequest, currentInterval time.Duration, _ *zap.Logger) error {
 	message := fmt.Sprintf("Bot Status:\nCurrent sync interval: %v\nBot is running in daemon mode", currentInterval)
+	return sendResponse(cmd, message)
+}
+
+func handleHelpCommand(cmd commandRequest, _ *zap.Logger) error {
+	helpText := `Available slash commands:
+- **/discroak-interval [duration]**: Set sync interval (e.g., '5m', '1h', '30s')
+- **/discroak-status**: Show current bot status
+- **/discroak-help**: Show this help message
+
+Examples:
+- /discroak-interval 10m
+- /discroak-interval 2h
+- /discroak-status`
+
+	return sendResponse(cmd, helpText)
+}
+
+func sendResponse(cmd commandRequest, message string) error {
+	if cmd.Interaction != nil {
+		// スラッシュコマンドの場合
+		return cmd.Session.InteractionRespond(cmd.Interaction.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: message,
+			},
+		})
+	}
+	// テキストコマンドの場合（現在は使用されない）
 	_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, message)
 	return err
 }
 
-func handleHelpCommand(cmd commandRequest, logger *zap.Logger) error {
-	helpText := `Available commands:
-- **!discroak interval [duration]**: Set sync interval (e.g., '5m', '1h', '30s')
-- **!discroak status**: Show current bot status
-- **!discroak help**: Show this help message
+func registerSlashCommands(sess *discordgo.Session, guildID string, logger *zap.Logger) error {
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name:        "discroak-interval",
+			Description: "Set sync interval",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "duration",
+					Description: "Duration (e.g., '5m', '1h', '30s')",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "discroak-status",
+			Description: "Show current bot status",
+		},
+		{
+			Name:        "discroak-help",
+			Description: "Show available commands",
+		},
+	}
 
-Examples:
-- !discroak interval 10m
-- !discroak interval 2h
-- !discroak status`
+	for _, cmd := range commands {
+		_, err := sess.ApplicationCommandCreate(sess.State.User.ID, guildID, cmd)
+		if err != nil {
+			logger.Error("failed to create slash command", zap.String("name", cmd.Name), zap.Error(err))
+			return err
+		}
+		logger.Info("registered slash command", zap.String("name", cmd.Name))
+	}
 
-	_, err := cmd.Session.ChannelMessageSend(cmd.ChannelID, helpText)
-	return err
+	return nil
 }
 
 func isConnectionError(err error) bool {
@@ -545,10 +611,10 @@ func PostResult(session *discordgo.Session, channelID string, addUsers, removeUs
 	if err != nil {
 		return err
 	}
-	// safeSlice similar to s.Slice(0,len) but safe for out of index.
-	safeSlice := func(s *utf8string.String, len int) string {
-		if s.RuneCount() > len {
-			return s.Slice(0, len)
+	// safeSlice similar to s.Slice(0,length) but safe for out of index.
+	safeSlice := func(s *utf8string.String, length int) string {
+		if s.RuneCount() > length {
+			return s.Slice(0, length)
 		}
 		return s.Slice(0, s.RuneCount())
 	}
@@ -788,9 +854,9 @@ func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
 		// レート制限エラーの場合は待機時間を長くする
 		if isRateLimitError(err) {
 			delay := baseDelay * time.Duration(1<<attempt) * 2
-			logger.Warn("rate limit hit, retrying", 
-				zap.Error(err), 
-				zap.Int("attempt", attempt+1), 
+			logger.Warn("rate limit hit, retrying",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1),
 				zap.Duration("delay", delay))
 			time.Sleep(delay)
 			continue
@@ -799,9 +865,9 @@ func executeWithRateLimit(operation func() error, logger *zap.Logger) error {
 		// 他のエラーの場合は短い間隔でリトライ
 		if attempt < maxRetries-1 {
 			delay := baseDelay * time.Duration(1<<attempt)
-			logger.Warn("operation failed, retrying", 
-				zap.Error(err), 
-				zap.Int("attempt", attempt+1), 
+			logger.Warn("operation failed, retrying",
+				zap.Error(err),
+				zap.Int("attempt", attempt+1),
 				zap.Duration("delay", delay))
 			time.Sleep(delay)
 			continue
@@ -831,10 +897,10 @@ func createDiscordSession(logger *zap.Logger, token string) (*discordgo.Session,
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		sess, err = discordgo.New("Bot " + token)
 		if err != nil {
-			logger.Error("failed to create discord session", 
-				zap.Error(err), 
+			logger.Error("failed to create discord session",
+				zap.Error(err),
 				zap.Int("attempt", attempt+1))
-			
+
 			if attempt < maxRetries-1 {
 				delay := baseDelay * time.Duration(1<<attempt)
 				logger.Info("retrying discord session creation", zap.Duration("delay", delay))
@@ -846,10 +912,10 @@ func createDiscordSession(logger *zap.Logger, token string) (*discordgo.Session,
 
 		err = sess.Open()
 		if err != nil {
-			logger.Error("failed to open discord connection", 
-				zap.Error(err), 
+			logger.Error("failed to open discord connection",
+				zap.Error(err),
 				zap.Int("attempt", attempt+1))
-			
+
 			if attempt < maxRetries-1 {
 				delay := baseDelay * time.Duration(1<<attempt)
 				logger.Info("retrying discord connection", zap.Duration("delay", delay))

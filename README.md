@@ -56,34 +56,34 @@ RUN_ONCE=true ./discroak
 | `KEYCLOAK_ATTRS_KEY` | Discord ID を格納する属性キー |
 | `KEYCLOAK_GROUP_PATH` | 対象グループのパス |
 
-## Discordコマンド
+## Discordスラッシュコマンド
 
-常時実行モードでは、以下のDiscordコマンドが利用できます：
+常時実行モードでは、以下のDiscordスラッシュコマンドが利用できます：
 
-### `!discroak interval [duration]`
+### `/discroak-interval [duration]`
 
 同期間隔をリアルタイムで変更します。
 
 ```
-!discroak interval 10m    # 10分間隔に変更
-!discroak interval 2h     # 2時間間隔に変更
-!discroak interval 30s    # 30秒間隔に変更（最小1分）
+/discroak-interval 10m    # 10分間隔に変更
+/discroak-interval 2h     # 2時間間隔に変更
+/discroak-interval 30s    # 30秒間隔に変更（最小1分）
 ```
 
-### `!discroak status`
+### `/discroak-status`
 
 現在のBot状態を表示します。
 
 ```
-!discroak status
+/discroak-status
 ```
 
-### `!discroak help`
+### `/discroak-help`
 
 利用可能なコマンドのヘルプを表示します。
 
 ```
-!discroak help
+/discroak-help
 ```
 
 ## 使用例
@@ -142,5 +142,5 @@ docker run -d \
 
 ### 設定の確認
 
-Discordで`!discroak status`を実行して、現在の設定を確認できます。
+Discordで`/discroak-status`を実行して、現在の設定を確認できます。
 
