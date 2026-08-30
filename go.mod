@@ -10,7 +10,7 @@ require (
 	github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd
 	github.com/bwmarrin/discordgo v0.27.0
 	github.com/samber/lo v1.37.0
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.12.1
 	github.com/vrischmann/envconfig v1.3.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
@@ -37,6 +37,7 @@ require (
 	github.com/spf13/cast v1.7.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/sys v0.23.0 // indirect
