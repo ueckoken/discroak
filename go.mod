@@ -8,7 +8,7 @@ require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/Nerzal/gocloak/v12 v12.0.0
 	github.com/azuki-bar/goset v0.0.0-20230115050520-ee0dcb43a8dd
-	github.com/bwmarrin/discordgo v0.27.0
+	github.com/bwmarrin/discordgo v0.29.0
 	github.com/samber/lo v1.37.0
 	github.com/stretchr/testify v1.8.1
 	github.com/vrischmann/envconfig v1.3.0
