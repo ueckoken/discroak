@@ -2,7 +2,7 @@ module github.com/ueckoken/discroak
 
 go 1.21
 
-toolchain go1.24.5
+toolchain go1.27.1
 
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
